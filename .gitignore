@@ -1,0 +1,38 @@
+# Dependencies
+/node_modules/
+
+# Local environment
+.env
+.env.*
+!.env.example
+.envrc
+/.context/
+
+# Build outputs
+/build/
+/dist/
+/coverage/
+/main.js
+/native/ghostty_vt.node
+/native/ghostty_vt/zig-out/
+/native/ghostty_vt/zig/zig-out/
+/native/ghostty_vt/zig/zig-pkg/
+/native/ghostty_vt/zig/.zig-cache/
+/vendor/zig/*/zig
+
+# Tool caches
+/.cache/
+.eslintcache
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
