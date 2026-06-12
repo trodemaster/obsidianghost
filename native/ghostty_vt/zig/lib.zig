@@ -2,6 +2,7 @@ const std = @import("std");
 const ghostty_input = @import("ghostty_src/input.zig");
 const key_encode = @import("ghostty_src/input/key_encode.zig");
 const terminal = @import("ghostty_src/terminal/main.zig");
+const config = @import("ghostty_src/config.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -437,16 +438,20 @@ export fn ghostty_vt_terminal_dump_viewport_row(
     if (terminal_ptr == null) return .{ .ptr = null, .len = 0 };
     const handle: *TerminalHandle = @ptrCast(@alignCast(terminal_ptr.?));
 
-    const pt: terminal.point.Point = .{ .viewport = .{ .x = 0, .y = row } };
-    const pin = handle.terminal.screens.active.pages.pin(pt) orelse return .{ .ptr = null, .len = 0 };
+    if (handle.terminal.cols == 0) return .{ .ptr = null, .len = 0 };
+
+    const tl_pt: terminal.point.Point = .{ .viewport = .{ .x = 0, .y = row } };
+    const br_pt: terminal.point.Point = .{ .viewport = .{ .x = handle.terminal.cols - 1, .y = row } };
+    const tl_pin = handle.terminal.screens.active.pages.pin(tl_pt) orelse return .{ .ptr = null, .len = 0 };
+    const br_pin = handle.terminal.screens.active.pages.pin(br_pt) orelse return .{ .ptr = null, .len = 0 };
 
     const alloc = std.heap.c_allocator;
     var builder: std.Io.Writer.Allocating = .init(alloc);
     defer builder.deinit();
 
     handle.terminal.screens.active.dumpString(&builder.writer, .{
-        .tl = pin,
-        .br = pin,
+        .tl = tl_pin,
+        .br = br_pin,
         .unwrap = false,
     }) catch return .{ .ptr = null, .len = 0 };
 
@@ -489,7 +494,7 @@ export fn ghostty_vt_terminal_dump_viewport_row_cell_styles(
     for (cells) |*cell| {
         const s = pin.style(cell);
 
-        var fg = s.fg(.{ .default = default_fg, .palette = palette, .bold = null });
+        var fg = s.fg(.{ .default = default_fg, .palette = palette, .bold = if (s.flags.bold) config.BoldColor.bright else null });
         var bg = s.bg(cell, palette) orelse default_bg;
 
         var flags: u8 = 0;
@@ -559,7 +564,7 @@ fn resolvedStyle(
     if (s.flags.invisible) flags |= 0x20;
     if (s.flags.strikethrough) flags |= 0x40;
 
-    const fg = s.fg(.{ .default = default_fg, .palette = palette, .bold = null });
+    const fg = s.fg(.{ .default = default_fg, .palette = palette, .bold = if (s.flags.bold) config.BoldColor.bright else null });
     return .{ .fg = fg, .bg = default_bg, .flags = flags };
 }
 

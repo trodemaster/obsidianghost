@@ -12,6 +12,7 @@ export type GhosttyTerminal = {
   resize(cols: number, rows: number): number;
   scrollViewport(deltaLines: number): number;
   dumpViewport(): string;
+  dumpViewportRow(row: number): string;
   cursorPosition(): { col: number; row: number; valid: boolean };
   // Phase 2: rich rendering APIs
   dumpViewportRowStyleRuns(row: number): Buffer;

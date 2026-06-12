@@ -10,7 +10,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "types": ["obsidian"]
+    "types": ["obsidian", "node"]
   },
   "include": ["**/*.ts"]
 }

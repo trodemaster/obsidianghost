@@ -1,8 +1,19 @@
-import { existsSync } from "fs";
-import { join } from "path";
-import { ItemView, Plugin, WorkspaceLeaf } from "obsidian";
+import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
+import { dirname, isAbsolute, join, normalize as normalizeFsPath, relative } from "path";
+import {
+  ItemView,
+  Notice,
+  Plugin,
+  TFile,
+  WorkspaceLeaf,
+  normalizePath,
+} from "obsidian";
 import type { IPty } from "node-pty";
 import {
+  StyleRunFlags,
+  parseDirtyRows,
+  parseStyleRuns,
   tryLoadGhosttyNative,
   type GhosttyNative,
   type GhosttyNativeState,
@@ -10,21 +21,65 @@ import {
 } from "./native/ghostty";
 
 const VIEW_TYPE_GHOSTTY = "ghostty-terminal-view";
+const DEFAULT_FG = 0xffffff;
+const DEFAULT_BG = 0x000000;
+
+type TerminalSize = {
+  cols: number;
+  rows: number;
+};
+
+type CharSize = {
+  width: number;
+  height: number;
+  baseline: number;
+};
+
+type TerminalTheme = {
+  fg: number;
+  bg: number;
+  fgCss: string;
+  bgCss: string;
+};
+
+type HoveredLink = {
+  uri: string;
+  row: number;
+  startCol: number;
+  endCol: number;
+};
 
 class GhosttyTerminalView extends ItemView {
   private pty: IPty | null = null;
   private vt: GhosttyTerminal | null = null;
-  private outputEl: HTMLPreElement | null = null;
   private bodyEl: HTMLElement | null = null;
   private screenEl: HTMLElement | null = null;
+  private canvasEl: HTMLCanvasElement | null = null;
+  private canvasContext: CanvasRenderingContext2D | null = null;
+  private linkTooltipEl: HTMLElement | null = null;
   private inputEl: HTMLTextAreaElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private pendingRender = false;
-  private charSize: { width: number; height: number } | null = null;
+  private forceFullRender = true;
+  private charSize: CharSize | null = null;
+  private viewportSize: TerminalSize = { cols: 80, rows: 24 };
+  private themeColors: TerminalTheme = {
+    fg: DEFAULT_FG,
+    bg: DEFAULT_BG,
+    fgCss: "#ffffff",
+    bgCss: "#000000",
+  };
+  private devicePixelRatio = 1;
   private autoScroll = true;
   private composing = false;
   private compositionBuffer = "";
   private scrollLines = 0;
+  private hoveredLink: HoveredLink | null = null;
+  private lastHoverCell: { col: number; row: number } | null = null;
+  private fontLoadPromise: Promise<void> | null = null;
+  private sessionTitle = "Claude";
+  private oscTitleBuf = "";
+  private oscTitleCapturing = false;
 
   constructor(leaf: WorkspaceLeaf, private plugin: GhosttyPlugin) {
     super(leaf);
@@ -34,11 +89,11 @@ class GhosttyTerminalView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Ghostty terminal";
+    return this.sessionTitle;
   }
 
   getIcon(): string {
-    return "terminal";
+    return "ghost";
   }
 
   async onOpen(): Promise<void> {
@@ -46,7 +101,16 @@ class GhosttyTerminalView extends ItemView {
     contentEl.empty();
     contentEl.addClass("ghostty-terminal-view");
 
+    this.addAction("plus", "New terminal", () => {
+      this.plugin.openNewTerminal(this.leaf).catch(console.error);
+    });
+
     this.bodyEl = contentEl;
+    this.registerEvent(this.app.workspace.on("css-change", this.handleCssChange));
+
+    // Font must be loaded before startSession() calls measureSize() → getCharSize(),
+    // otherwise Canvas falls back to a generic monospace and caches wrong metrics.
+    await this.ensureFontLoaded();
 
     const nativeState = await Promise.resolve(this.plugin.getNativeState(true));
 
@@ -74,8 +138,22 @@ class GhosttyTerminalView extends ItemView {
       cls: "ghostty-terminal-screen",
     });
     this.screenEl = screen;
-    this.outputEl = screen.createEl("pre", {
-      cls: "ghostty-terminal-output",
+
+    const canvas = screen.createEl("canvas", {
+      cls: "ghostty-terminal-canvas",
+    });
+    this.canvasEl = canvas;
+    this.canvasContext = canvas.getContext("2d");
+    if (!this.canvasContext) {
+      this.bodyEl.createEl("div", {
+        cls: "ghostty-terminal-placeholder",
+        text: "Failed to initialize terminal canvas.",
+      });
+      return;
+    }
+
+    this.linkTooltipEl = screen.createEl("div", {
+      cls: "ghostty-terminal-link-tooltip",
     });
 
     const input = this.bodyEl.createEl("textarea", {
@@ -84,11 +162,14 @@ class GhosttyTerminalView extends ItemView {
     input.spellcheck = false;
     input.autocapitalize = "off";
     input.autocomplete = "off";
-    input.autocorrect = "off";
+    input.setAttribute("autocorrect", "off");
     this.inputEl = input;
 
     const { cols, rows } = this.measureSize();
+    this.viewportSize = { cols, rows };
     this.vt = native.createTerminal(cols, rows);
+    this.applyThemeColors();
+    this.applyGhosttyPalette();
 
     let spawnPty: typeof import("node-pty").spawn;
     try {
@@ -126,6 +207,7 @@ class GhosttyTerminalView extends ItemView {
     this.pty.onData((data) => {
       if (!this.vt) return;
       this.vt.feed(data);
+      this.parseOscTitleFromStream(data);
       this.scheduleRender();
     });
 
@@ -134,6 +216,11 @@ class GhosttyTerminalView extends ItemView {
     this.bodyEl.addEventListener("click", this.focusTerminal);
     this.screenEl.addEventListener("scroll", this.handleScroll, { passive: true });
     this.screenEl.addEventListener("wheel", this.handleWheel, { passive: false });
+    this.screenEl.addEventListener("mousemove", this.handleMouseMove, {
+      passive: true,
+    });
+    this.screenEl.addEventListener("mouseleave", this.handleMouseLeave);
+    this.screenEl.addEventListener("click", this.handleScreenClick, true);
     this.inputEl.addEventListener("keydown", this.handleKeyDown, true);
     this.inputEl.addEventListener("paste", this.handlePaste, true);
     this.inputEl.addEventListener("input", this.handleInput, true);
@@ -159,14 +246,15 @@ class GhosttyTerminalView extends ItemView {
     this.resizeObserver = new ResizeObserver(() => {
       // Invalidate char size cache on resize
       this.charSize = null;
-      this.updateSize();
+      this.updateSize(true);
     });
     this.resizeObserver.observe(screen);
 
     // Delay initial render to ensure styles are applied
     requestAnimationFrame(() => {
       this.charSize = null; // Re-measure after styles are applied
-      this.scheduleRender();
+      this.updateSize(true);
+      this.scheduleRender(true);
     });
   }
 
@@ -194,6 +282,9 @@ class GhosttyTerminalView extends ItemView {
     if (this.screenEl) {
       this.screenEl.removeEventListener("scroll", this.handleScroll);
       this.screenEl.removeEventListener("wheel", this.handleWheel);
+      this.screenEl.removeEventListener("mousemove", this.handleMouseMove);
+      this.screenEl.removeEventListener("mouseleave", this.handleMouseLeave);
+      this.screenEl.removeEventListener("click", this.handleScreenClick, true);
     }
     if (this.inputEl) {
       this.inputEl.removeEventListener("keydown", this.handleKeyDown, true);
@@ -217,71 +308,323 @@ class GhosttyTerminalView extends ItemView {
       this.inputEl.removeEventListener("focus", this.handleFocus);
       this.inputEl.removeEventListener("blur", this.handleBlur);
     }
-    this.outputEl = null;
     this.screenEl = null;
+    this.canvasEl = null;
+    this.canvasContext = null;
+    this.linkTooltipEl = null;
     this.inputEl = null;
     this.pendingRender = false;
+    this.forceFullRender = true;
     this.charSize = null;
+    this.viewportSize = { cols: 80, rows: 24 };
     this.autoScroll = true;
     this.composing = false;
     this.compositionBuffer = "";
     this.scrollLines = 0;
+    this.hoveredLink = null;
+    this.lastHoverCell = null;
   }
 
-  private scheduleRender(): void {
-    if (this.pendingRender || !this.outputEl || !this.vt) return;
+  private scheduleRender(forceFull = false): void {
+    if (forceFull) {
+      this.forceFullRender = true;
+    }
+    if (this.pendingRender || !this.canvasEl || !this.canvasContext || !this.vt) {
+      return;
+    }
     this.pendingRender = true;
     requestAnimationFrame(() => {
       this.pendingRender = false;
-      if (!this.outputEl || !this.vt) return;
-      this.outputEl.setText(this.vt.dumpViewport());
-      this.updateCaret();
-      const container = this.screenEl;
-      if (container && this.autoScroll) {
-        container.scrollTop = container.scrollHeight;
-      }
+      this.renderFrame();
     });
   }
 
-  private updateSize(): void {
-    if (!this.vt || !this.pty) return;
-    const { cols, rows } = this.measureSize();
-    this.vt.resize(cols, rows);
-    this.pty.resize(cols, rows);
-    this.scheduleRender();
+  private renderFrame(): void {
+    if (!this.canvasEl || !this.canvasContext || !this.vt) return;
+
+    const canvasChanged = this.syncCanvasSize();
+    const scrollDelta = this.vt.takeViewportScrollDelta();
+    const forceFull = this.forceFullRender || canvasChanged || scrollDelta !== 0;
+    this.forceFullRender = false;
+
+    const { rows } = this.viewportSize;
+    const dirtyRows = forceFull
+      ? this.allViewportRows()
+      : parseDirtyRows(this.vt.takeDirtyViewportRows(rows));
+
+    if (forceFull) {
+      this.clearCanvas();
+    }
+
+    for (const row of dirtyRows) {
+      if (row >= 0 && row < rows) {
+        this.renderRow(row);
+      }
+    }
+
+    this.drawHoveredLink();
+    this.updateCaret();
   }
 
-  private measureSize(): { cols: number; rows: number } {
+  private updateSize(forceFull = false): void {
+    if (!this.vt || !this.pty) return;
+    const { cols, rows } = this.measureSize();
+    const changed = cols !== this.viewportSize.cols || rows !== this.viewportSize.rows;
+    this.viewportSize = { cols, rows };
+    this.vt.resize(cols, rows);
+    this.pty.resize(cols, rows);
+    this.scheduleRender(forceFull || changed);
+  }
+
+  private measureSize(): TerminalSize {
     const target = this.screenEl ?? this.bodyEl;
     if (!target) {
       return { cols: 80, rows: 24 };
     }
-    const rect = target.getBoundingClientRect();
+    const rect = this.getTerminalContentRect(target);
     const { width, height } = this.getCharSize();
     const cols = Math.max(2, Math.floor(rect.width / width));
-    const rows = Math.max(2, Math.floor((rect.height - 12) / height));
+    const rows = Math.max(2, Math.floor(rect.height / height));
     return { cols, rows };
   }
 
-  private getCharSize(): { width: number; height: number } {
-    if (this.charSize) return this.charSize;
-    const target = this.outputEl ?? this.bodyEl;
-    if (!target) {
-      return { width: 8, height: 16 };
+  // Load the terminal font via FontFace so Canvas measureText() uses the correct
+  // glyphs and metrics before we compute charSize.  Must be awaited before
+  // startSession() calls measureSize() → getCharSize().
+  private ensureFontLoaded(): Promise<void> {
+    if (this.fontLoadPromise) return this.fontLoadPromise;
+    const { family, filePath, size } = this.plugin.terminalFont;
+    console.log(`[ghostty] terminalFont: family="${family}" size=${size} filePath="${filePath}"`);
+    if (!filePath) {
+      console.warn("[ghostty] No font file found — Canvas will use system monospace fallback");
+      this.fontLoadPromise = Promise.resolve();
+      return this.fontLoadPromise;
     }
-    // Use a longer string and divide for more accurate measurement
-    const testString = "MMMMMMMMMM";
-    const span = document.createElement("span");
-    span.textContent = testString;
-    span.addClass("ghostty-char-measure");
-    target.appendChild(span);
-    const rect = span.getBoundingClientRect();
-    span.remove();
-    this.charSize = {
-      width: (rect.width / testString.length) || 8,
-      height: rect.height || 16,
-    };
+    this.fontLoadPromise = (async () => {
+      try {
+        // Read font bytes and encode as base64 data URI.
+        // This avoids Electron CSP restrictions on file:// URLs in FontFace,
+        // and works regardless of whether the font is in Electron's font cache.
+        const bytes = readFileSync(filePath);
+        const mime = filePath.toLowerCase().endsWith(".otf") ? "font/otf" : "font/ttf";
+        const dataUri = `url(data:${mime};base64,${bytes.toString("base64")})`;
+        const face = new FontFace(family, dataUri);
+        await face.load();
+        document.fonts.add(face);
+        console.log(`[ghostty] FontFace loaded: "${family}" from ${filePath} (${bytes.length} bytes)`);
+      } catch (e) {
+        console.error("[ghostty] FontFace.load() failed:", e);
+      }
+    })();
+    return this.fontLoadPromise;
+  }
+
+  private getCharSize(): CharSize {
+    if (this.charSize) return this.charSize;
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      this.charSize = { width: 8, height: 16, baseline: 13 };
+      return this.charSize;
+    }
+
+    ctx.font = this.getCanvasFont(0);
+    console.log(`[ghostty] getCharSize font="${ctx.font}" dpr=${window.devicePixelRatio}`);
+
+    // Width: average 10 wide chars to reduce sub-pixel error
+    const width = ctx.measureText("MMMMMMMMMM").width / 10;
+
+    // Height: fontBoundingBox is the full typographic line box — ascender peak to
+    // descender trough — which is exactly what Ghostty uses for row pitch.
+    // No extra leading is added; Ghostty adds none either.
+    const m = ctx.measureText("Mg|");
+    const fbAscent = m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent * 1.2;
+    const fbDescent = m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent * 1.5;
+    const height = Math.ceil(fbAscent + fbDescent);
+    const baseline = Math.round(fbAscent);
+
+    console.log(`[ghostty] charSize: width=${width.toFixed(2)} height=${height} baseline=${baseline} fbAscent=${fbAscent.toFixed(2)} fbDescent=${fbDescent.toFixed(2)}`);
+    this.charSize = { width, height, baseline };
     return this.charSize;
+  }
+
+  private getTerminalContentRect(target: HTMLElement): { width: number; height: number } {
+    const rect = target.getBoundingClientRect();
+    const style = getComputedStyle(target);
+    const horizontalPadding =
+      Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+    const verticalPadding =
+      Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+    return {
+      width: Math.max(1, rect.width - horizontalPadding),
+      height: Math.max(1, rect.height - verticalPadding),
+    };
+  }
+
+  private syncCanvasSize(): boolean {
+    if (!this.canvasEl || !this.canvasContext) return false;
+
+    const rect = this.canvasEl.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.floor(rect.width * dpr));
+    const height = Math.max(1, Math.floor(rect.height * dpr));
+    const changed =
+      this.canvasEl.width !== width ||
+      this.canvasEl.height !== height ||
+      this.devicePixelRatio !== dpr;
+
+    if (changed) {
+      this.canvasEl.width = width;
+      this.canvasEl.height = height;
+      this.devicePixelRatio = dpr;
+    }
+
+    this.canvasContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.canvasContext.imageSmoothingEnabled = false;
+    return changed;
+  }
+
+  private clearCanvas(): void {
+    if (!this.canvasEl || !this.canvasContext) return;
+    const rect = this.canvasEl.getBoundingClientRect();
+    this.canvasContext.fillStyle = this.themeColors.bgCss;
+    this.canvasContext.fillRect(0, 0, rect.width, rect.height);
+  }
+
+  private renderRow(row: number): void {
+    if (!this.canvasEl || !this.canvasContext || !this.vt) return;
+
+    const { cols } = this.viewportSize;
+    const { width, height, baseline } = this.getCharSize();
+    const rect = this.canvasEl.getBoundingClientRect();
+    const y = row * height;
+    const cells = this.rowTextToCells(this.vt.dumpViewportRow(row), cols);
+    const runs = parseStyleRuns(this.vt.dumpViewportRowStyleRuns(row));
+    const ctx = this.canvasContext;
+
+    ctx.fillStyle = this.themeColors.bgCss;
+    ctx.fillRect(0, y, rect.width, height);
+
+    if (runs.length === 0) {
+      this.drawTextRun(cells.join(""), 0, cols, y, baseline, 0, this.themeColors);
+      return;
+    }
+
+    for (const run of runs) {
+      const start = Math.max(0, Math.min(cols, run.startCol === 0 ? run.startCol : run.startCol - 1));
+      const end = Math.max(start, Math.min(cols, run.endCol));
+      if (end <= start) continue;
+
+      const runTheme: TerminalTheme = {
+        fg: run.fg,
+        bg: run.bg,
+        fgCss: this.colorToCss(run.fg),
+        bgCss: this.colorToCss(run.bg),
+      };
+      this.drawTextRun(
+        cells.slice(start, end).join(""),
+        start,
+        end,
+        y,
+        baseline,
+        run.flags,
+        runTheme
+      );
+    }
+  }
+
+  private drawTextRun(
+    text: string,
+    startCol: number,
+    endCol: number,
+    y: number,
+    baseline: number,
+    flags: number,
+    theme: TerminalTheme
+  ): void {
+    if (!this.canvasContext) return;
+    const ctx = this.canvasContext;
+    const { width, height } = this.getCharSize();
+    const x = startCol * width;
+    const runWidth = (endCol - startCol) * width;
+
+    ctx.fillStyle = theme.bgCss;
+    ctx.fillRect(x, y, runWidth, height);
+
+    if (flags & StyleRunFlags.invisible) return;
+
+    ctx.font = this.getCanvasFont(flags);
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = theme.fgCss;
+    ctx.globalAlpha = flags & StyleRunFlags.faint ? 0.55 : 1;
+    // Render each cell at its exact grid position so Canvas advance widths
+    // cannot cause drift (space chars especially vary across fonts/renderers).
+    const chars = Array.from(text);
+    for (let i = 0; i < chars.length; i++) {
+      ctx.fillText(chars[i], x + i * width, y + baseline);
+    }
+    ctx.globalAlpha = 1;
+
+    if (flags & StyleRunFlags.underline) {
+      this.drawTextDecoration(x, y + height - 2, runWidth, theme.fgCss);
+    }
+    if (flags & StyleRunFlags.strikethrough) {
+      this.drawTextDecoration(x, y + height * 0.55, runWidth, theme.fgCss);
+    }
+  }
+
+  private drawTextDecoration(
+    x: number,
+    y: number,
+    width: number,
+    color: string
+  ): void {
+    if (!this.canvasContext) return;
+    const ctx = this.canvasContext;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, Math.round(y) + 0.5);
+    ctx.lineTo(x + width, Math.round(y) + 0.5);
+    ctx.stroke();
+  }
+
+  private drawHoveredLink(): void {
+    if (!this.hoveredLink || !this.canvasContext) return;
+    const { row, startCol, endCol } = this.hoveredLink;
+    const rowIndex = row - 1;
+    if (rowIndex < 0 || rowIndex >= this.viewportSize.rows) return;
+
+    const { width, height } = this.getCharSize();
+    const x = (startCol - 1) * width;
+    const y = rowIndex * height + height - 2;
+    this.drawTextDecoration(
+      x,
+      y,
+      Math.max(width, (endCol - startCol) * width),
+      this.themeColors.fgCss
+    );
+  }
+
+  private rowTextToCells(rowText: string, cols: number): string[] {
+    const line = rowText.replace(/\r?\n$/, "");
+    const cells = Array.from(line);
+    while (cells.length < cols) {
+      cells.push(" ");
+    }
+    return cells.slice(0, cols);
+  }
+
+  private allViewportRows(): number[] {
+    return Array.from({ length: this.viewportSize.rows }, (_, row) => row);
+  }
+
+  private getCanvasFont(flags: number): string {
+    const { family, size } = this.plugin.terminalFont;
+    const fontStyle = flags & StyleRunFlags.italic ? "italic" : "normal";
+    const fontWeight = flags & StyleRunFlags.bold ? "700" : "400";
+    return `${fontStyle} ${fontWeight} ${size}px ${family}`;
   }
 
   private focusTerminal = (): void => {
@@ -319,12 +662,56 @@ class GhosttyTerminalView extends ItemView {
     });
   }
 
+  private parseOscTitleFromStream(data: string): void {
+    for (let i = 0; i < data.length; i++) {
+      const ch = data[i];
+      if (this.oscTitleCapturing) {
+        if (ch === "\x07") {
+          // BEL terminator
+          this.setSessionTitle(this.oscTitleBuf);
+          this.oscTitleCapturing = false;
+          this.oscTitleBuf = "";
+        } else if (ch === "\x1b" && data[i + 1] === "\\") {
+          // ST (ESC \) terminator
+          this.setSessionTitle(this.oscTitleBuf);
+          this.oscTitleCapturing = false;
+          this.oscTitleBuf = "";
+          i++;
+        } else {
+          this.oscTitleBuf += ch;
+        }
+      } else if (ch === "\x1b" && data[i + 1] === "]") {
+        const code = data.slice(i + 2, i + 4);
+        if (code === "0;" || code === "2;") {
+          this.oscTitleCapturing = true;
+          this.oscTitleBuf = "";
+          i += 3; // skip ESC ] N ;
+        }
+      }
+    }
+  }
+
+  private setSessionTitle(raw: string): void {
+    const title = raw.replace(/[\x00-\x1f]/g, "").trim();
+    if (!title || title === this.sessionTitle) return;
+    // Prefer Claude-set titles; strip common shell directory prefixes
+    this.sessionTitle = title.length > 40 ? title.slice(0, 38) + "…" : title;
+    this.app.workspace.trigger("layout-change");
+  }
+
   private handleFocus = (): void => {
     this.screenEl?.addClass("is-focused");
   };
 
   private handleBlur = (): void => {
     this.screenEl?.removeClass("is-focused");
+  };
+
+  private handleCssChange = (): void => {
+    this.charSize = null;
+    this.applyThemeColors();
+    this.updateSize(true);
+    this.scheduleRender(true);
   };
 
   private handleScroll = (): void => {
@@ -354,6 +741,114 @@ class GhosttyTerminalView extends ItemView {
       }
     }
   };
+
+  private handleMouseMove = (event: MouseEvent): void => {
+    const cell = this.eventToCell(event);
+    if (!cell) {
+      this.setHoveredLink(null);
+      return;
+    }
+    if (
+      this.lastHoverCell?.col === cell.col &&
+      this.lastHoverCell?.row === cell.row
+    ) {
+      this.positionLinkTooltip(event);
+      return;
+    }
+
+    this.lastHoverCell = cell;
+    this.setHoveredLink(this.findLinkAt(cell.col, cell.row));
+    this.positionLinkTooltip(event);
+  };
+
+  private handleMouseLeave = (): void => {
+    this.lastHoverCell = null;
+    this.setHoveredLink(null);
+  };
+
+  private handleScreenClick = (event: MouseEvent): void => {
+    if (!this.hoveredLink) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    this.openHyperlink(this.hoveredLink.uri).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`Failed to open link: ${message}`);
+    });
+  };
+
+  private eventToCell(event: MouseEvent): { col: number; row: number } | null {
+    if (!this.canvasEl) return null;
+    const rect = this.canvasEl.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null;
+
+    const { width, height } = this.getCharSize();
+    const col = Math.floor(x / width) + 1;
+    const row = Math.floor(y / height) + 1;
+    if (
+      col < 1 ||
+      row < 1 ||
+      col > this.viewportSize.cols ||
+      row > this.viewportSize.rows
+    ) {
+      return null;
+    }
+    return { col, row };
+  }
+
+  private findLinkAt(col: number, row: number): HoveredLink | null {
+    if (!this.vt) return null;
+    const uri = this.vt.hyperlinkAt(col, row);
+    if (!uri) return null;
+
+    let startCol = col;
+    while (startCol > 1 && this.vt.hyperlinkAt(startCol - 1, row) === uri) {
+      startCol--;
+    }
+
+    let endCol = col + 1;
+    while (
+      endCol <= this.viewportSize.cols &&
+      this.vt.hyperlinkAt(endCol, row) === uri
+    ) {
+      endCol++;
+    }
+
+    return { uri, row, startCol, endCol };
+  }
+
+  private setHoveredLink(link: HoveredLink | null): void {
+    const previous = this.hoveredLink;
+    const changed =
+      previous?.uri !== link?.uri ||
+      previous?.row !== link?.row ||
+      previous?.startCol !== link?.startCol ||
+      previous?.endCol !== link?.endCol;
+    if (!changed) return;
+
+    this.hoveredLink = link;
+    this.screenEl?.toggleClass("has-hovered-link", Boolean(link));
+
+    if (this.linkTooltipEl) {
+      this.linkTooltipEl.toggleClass("is-visible", Boolean(link));
+      this.linkTooltipEl.textContent = link?.uri ?? "";
+    }
+
+    this.scheduleRender(true);
+  }
+
+  private positionLinkTooltip(event: MouseEvent): void {
+    if (!this.hoveredLink || !this.linkTooltipEl || !this.screenEl) return;
+    const screenRect = this.screenEl.getBoundingClientRect();
+    const tooltip = this.linkTooltipEl;
+    const left = event.clientX - screenRect.left + 12;
+    const top = event.clientY - screenRect.top + 14;
+
+    tooltip.style.left = `${Math.max(4, Math.min(left, screenRect.width - 24))}px`;
+    tooltip.style.top = `${Math.max(4, Math.min(top, screenRect.height - 24))}px`;
+  }
 
   private handlePaste = (event: ClipboardEvent): void => {
     if (!this.pty) return;
@@ -536,13 +1031,365 @@ class GhosttyTerminalView extends ItemView {
     this.composing = false;
     this.compositionBuffer = "";
   };
+
+  private applyThemeColors(): void {
+    const { foreground: themeFg, background: themeBg } = this.plugin.terminalColorConfig;
+    const fg = themeFg ?? DEFAULT_FG;
+    let bg: number;
+    if (themeBg !== null) {
+      bg = themeBg;
+    } else {
+      const target = this.screenEl ?? this.bodyEl ?? document.body;
+      const bgCss = getComputedStyle(target).backgroundColor || "#000000";
+      bg = this.parseCssColor(bgCss, DEFAULT_BG);
+    }
+    this.themeColors = {
+      fg,
+      bg,
+      fgCss: this.colorToCss(fg),
+      bgCss: this.colorToCss(bg),
+    };
+    this.vt?.setDefaultColors(fg, bg);
+  }
+
+  private applyGhosttyPalette(): void {
+    if (!this.vt) return;
+    const { palette } = this.plugin.terminalColorConfig;
+    if (palette.size === 0) return;
+    let osc = "";
+    for (const [index, color] of palette) {
+      osc += `\x1b]4;${index};#${color.toString(16).padStart(6, "0")}\x07`;
+    }
+    this.vt.feed(osc);
+  }
+
+  private async openHyperlink(uri: string): Promise<void> {
+    const trimmed = uri.trim();
+    if (!trimmed) return;
+
+    if (/^https?:\/\//i.test(trimmed)) {
+      window.open(trimmed, "_blank");
+      return;
+    }
+
+    const target = this.resolveVaultTarget(trimmed);
+    if (!target) {
+      new Notice(`No vault file found for ${trimmed}`);
+      return;
+    }
+
+    const file = this.app.vault.getAbstractFileByPath(target.path);
+    if (!(file instanceof TFile)) {
+      new Notice(`No vault file found for ${target.path}`);
+      return;
+    }
+
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file, {
+      active: true,
+      eState: target.line
+        ? {
+            line: Math.max(0, target.line - 1),
+            col: target.column ? Math.max(0, target.column - 1) : 0,
+          }
+        : undefined,
+    });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+
+  private resolveVaultTarget(
+    uri: string
+  ): { path: string; line?: number; column?: number } | null {
+    const pathLike = this.uriToPathLike(uri);
+    if (!pathLike) return null;
+
+    const location = this.extractPathLocation(pathLike);
+    const candidates = this.getVaultPathCandidates(location.path);
+
+    for (const candidate of candidates) {
+      const normalized = normalizePath(candidate);
+      const file = this.app.vault.getAbstractFileByPath(normalized);
+      if (file instanceof TFile) {
+        return {
+          path: normalized,
+          line: location.line,
+          column: location.column,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private uriToPathLike(uri: string): string | null {
+    if (/^file:\/\//i.test(uri)) {
+      try {
+        return decodeURIComponent(new URL(uri).pathname);
+      } catch {
+        return uri.replace(/^file:\/\//i, "");
+      }
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:/i.test(uri)) {
+      return null;
+    }
+
+    return uri;
+  }
+
+  private extractPathLocation(pathLike: string): {
+    path: string;
+    line?: number;
+    column?: number;
+  } {
+    const pathWithoutHash = pathLike.split("#", 1)[0].split("?", 1)[0];
+    const match = /^(.*?)(?::(\d+))(?::(\d+))?$/.exec(pathWithoutHash);
+    if (!match || !match[1]) {
+      return { path: pathWithoutHash };
+    }
+
+    return {
+      path: match[1],
+      line: match[2] ? Number.parseInt(match[2], 10) : undefined,
+      column: match[3] ? Number.parseInt(match[3], 10) : undefined,
+    };
+  }
+
+  private getVaultPathCandidates(pathLike: string): string[] {
+    const candidates: string[] = [];
+    const vaultBasePath = this.getVaultBasePath();
+
+    if (isAbsolute(pathLike)) {
+      const absolutePath = normalizeFsPath(pathLike);
+      if (vaultBasePath && this.isPathInside(vaultBasePath, absolutePath)) {
+        candidates.push(relative(vaultBasePath, absolutePath));
+      }
+    } else {
+      candidates.push(pathLike);
+
+      const activeFile = this.app.workspace.getActiveFile();
+      if (activeFile) {
+        const activeDir = dirname(activeFile.path);
+        candidates.push(activeDir === "." ? pathLike : join(activeDir, pathLike));
+      }
+    }
+
+    return Array.from(new Set(candidates));
+  }
+
+  private getVaultBasePath(): string | null {
+    const adapter = this.app.vault.adapter as { getBasePath?: () => string };
+    const basePath = adapter.getBasePath?.();
+    return basePath ? normalizeFsPath(basePath) : null;
+  }
+
+  private isPathInside(parent: string, child: string): boolean {
+    const diff = relative(parent, child);
+    return diff === "" || (!diff.startsWith("..") && !isAbsolute(diff));
+  }
+
+  private parseCssColor(value: string, fallback: number): number {
+    const trimmed = value.trim();
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(trimmed);
+    if (hex) {
+      const raw = hex[1];
+      const normalized =
+        raw.length === 3
+          ? raw
+              .split("")
+              .map((part) => `${part}${part}`)
+              .join("")
+          : raw;
+      return Number.parseInt(normalized, 16);
+    }
+
+    const rgb = /^rgba?\(([^)]+)\)$/i.exec(trimmed);
+    if (rgb) {
+      const [r, g, b] = rgb[1]
+        .split(",")
+        .slice(0, 3)
+        .map((part) => Math.max(0, Math.min(255, Number.parseFloat(part))));
+      if ([r, g, b].every((part) => Number.isFinite(part))) {
+        return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
+      }
+    }
+
+    return fallback;
+  }
+
+  private colorToCss(color: number): string {
+    return `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
+  }
+}
+
+type TerminalFont = {
+  family: string;   // CSS family name used with Canvas — always "GhosttyTerminalFont" when loaded from file
+  size: number;     // px, from Ghostty font-size
+  filePath: string; // absolute path to the TTF/OTF file, or "" if not found
+};
+
+type GhosttyColorConfig = {
+  palette: Map<number, number>; // ANSI palette index 0-255 → 0xRRGGBB
+  foreground: number | null;    // default fg (0xRRGGBB), null if not in config/theme
+  background: number | null;    // default bg (0xRRGGBB), null if not in config/theme
+};
+
+// We load the font ourselves via FontFace so we assign our own internal CSS name.
+// This avoids relying on Electron knowing the system CSS family name for the font.
+const GHOSTTY_FONT_FAMILY = "GhosttyTerminalFont";
+
+function parseHexColor(s: string): number | null {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(s.trim());
+  return m ? parseInt(m[1], 16) : null;
+}
+
+function findGhosttyThemeFile(name: string): string {
+  const candidates = [
+    join(homedir(), ".config", "ghostty", "themes", name),
+    join(homedir(), "Library", "Application Support", "com.mitchellh.ghostty", "themes", name),
+    `/Applications/Ghostty.app/Contents/Resources/ghostty/themes/${name}`,
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return "";
+}
+
+function parseColorLines(text: string): GhosttyColorConfig {
+  const result: GhosttyColorConfig = { palette: new Map(), foreground: null, background: null };
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+    const eq = trimmed.indexOf("=");
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim();
+    if (key === "palette") {
+      const m = /^(\d+)=(.+)$/.exec(val);
+      if (m) {
+        const idx = parseInt(m[1], 10);
+        const color = parseHexColor(m[2]);
+        if (idx >= 0 && idx <= 255 && color !== null) result.palette.set(idx, color);
+      }
+    } else if (key === "foreground") {
+      const c = parseHexColor(val);
+      if (c !== null) result.foreground = c;
+    } else if (key === "background") {
+      const c = parseHexColor(val);
+      if (c !== null) result.background = c;
+    }
+  }
+  return result;
+}
+
+function parseGhosttyColorConfig(): GhosttyColorConfig {
+  const configPaths = [
+    join(homedir(), ".config", "ghostty", "config"),
+    join(homedir(), "Library", "Application Support", "com.mitchellh.ghostty", "config"),
+  ];
+  for (const p of configPaths) {
+    if (!existsSync(p)) continue;
+    try {
+      const text = readFileSync(p, "utf8");
+      // Extract theme name from config first
+      let themeName = "";
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+        const eq = trimmed.indexOf("=");
+        if (trimmed.slice(0, eq).trim() === "theme") {
+          // Support "LightTheme,DarkTheme" — take the dark (second) variant, or the single value
+          const parts = trimmed.slice(eq + 1).trim().split(",");
+          themeName = (parts[1] ?? parts[0]).trim();
+          break;
+        }
+      }
+      // Parse theme palette as base, then override with config-level entries
+      const base: GhosttyColorConfig = themeName
+        ? (() => {
+            const tf = findGhosttyThemeFile(themeName);
+            return tf ? parseColorLines(readFileSync(tf, "utf8")) : { palette: new Map(), foreground: null, background: null };
+          })()
+        : { palette: new Map(), foreground: null, background: null };
+      const overrides = parseColorLines(text);
+      // Config entries override theme entries
+      for (const [idx, color] of overrides.palette) base.palette.set(idx, color);
+      if (overrides.foreground !== null) base.foreground = overrides.foreground;
+      if (overrides.background !== null) base.background = overrides.background;
+      return base;
+    } catch {
+      // ignore
+    }
+  }
+  return { palette: new Map(), foreground: null, background: null };
+}
+
+// Search standard macOS font directories for a font by its PostScript/filename stem.
+// Does not require fc-list (which MacPorts installs outside Electron's PATH).
+function findFontFile(postscriptName: string): string {
+  const dirs = [
+    "/Library/Fonts",
+    join(homedir(), "Library", "Fonts"),
+    "/System/Library/Fonts",
+    "/System/Library/Fonts/Supplemental",
+    "/usr/local/share/fonts",
+    "/opt/local/share/fonts",
+  ];
+  for (const dir of dirs) {
+    for (const ext of [".ttf", ".otf", ".TTF", ".OTF"]) {
+      const candidate = join(dir, `${postscriptName}${ext}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return "";
+}
+
+function parseGhosttyConfig(): TerminalFont {
+  const candidates = [
+    join(homedir(), ".config", "ghostty", "config"),
+    join(homedir(), "Library", "Application Support", "com.mitchellh.ghostty", "config"),
+  ];
+  for (const p of candidates) {
+    if (!existsSync(p)) continue;
+    try {
+      const text = readFileSync(p, "utf8");
+      let rawFamily = "";
+      let size = 0;
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+        const eq = trimmed.indexOf("=");
+        const key = trimmed.slice(0, eq).trim();
+        const val = trimmed.slice(eq + 1).trim();
+        if (key === "font-family") rawFamily = val;
+        else if (key === "font-size") size = parseFloat(val) || 0;
+      }
+      if (rawFamily || size > 0) {
+        const filePath = rawFamily ? findFontFile(rawFamily) : "";
+        return {
+          family: filePath ? GHOSTTY_FONT_FAMILY : "monospace",
+          filePath,
+          size: size > 0 ? size : 13,
+        };
+      }
+    } catch {
+      // ignore unreadable config
+    }
+  }
+  return { family: "monospace", size: 13, filePath: "" };
 }
 
 export default class GhosttyPlugin extends Plugin {
   private nativeState: GhosttyNativeState | null = null;
+  terminalFont: TerminalFont = parseGhosttyConfig();
+  terminalColorConfig: GhosttyColorConfig = parseGhosttyColorConfig();
+
   async onload(): Promise<void> {
     this.registerView(VIEW_TYPE_GHOSTTY, (leaf: WorkspaceLeaf) => {
       return new GhosttyTerminalView(leaf, this);
+    });
+
+    this.addRibbonIcon("ghost", "Open Claude terminal", () => {
+      this.toggleView().catch(console.error);
     });
 
     this.addCommand({
@@ -550,6 +1397,14 @@ export default class GhosttyPlugin extends Plugin {
       name: "Toggle terminal",
       callback: () => {
         this.toggleView().catch(console.error);
+      },
+    });
+
+    this.addCommand({
+      id: "new-terminal",
+      name: "New terminal",
+      callback: () => {
+        this.openNewTerminal().catch(console.error);
       },
     });
 
@@ -595,16 +1450,39 @@ export default class GhosttyPlugin extends Plugin {
       return;
     }
 
+    // First open: create a horizontal split (terminal panel at bottom)
     const leaf = workspace.getLeaf("split", "horizontal");
     await leaf.setViewState({ type: VIEW_TYPE_GHOSTTY, active: true });
     await workspace.revealLeaf(leaf);
 
-    // Focus the terminal input after it opens
     setTimeout(() => {
       const view = leaf.view;
       if (view instanceof GhosttyTerminalView) {
         view.focusInput();
       }
+    }, 100);
+  }
+
+  async openNewTerminal(fromLeaf?: WorkspaceLeaf): Promise<void> {
+    const { workspace } = this.app;
+    // Anchor leaf: the caller's leaf (from "+" button) or any existing terminal.
+    // Setting it active first makes getLeaf("tab") open in the same tab group.
+    const anchor = fromLeaf ?? workspace.getLeavesOfType(VIEW_TYPE_GHOSTTY).at(-1);
+
+    if (anchor) {
+      workspace.setActiveLeaf(anchor, { focus: false });
+    }
+
+    const newLeaf = anchor
+      ? workspace.getLeaf("tab")              // new tab in same group
+      : workspace.getLeaf("split", "horizontal"); // first ever terminal: bottom split
+
+    await newLeaf.setViewState({ type: VIEW_TYPE_GHOSTTY, active: true });
+    await workspace.revealLeaf(newLeaf);
+
+    setTimeout(() => {
+      const view = newLeaf.view;
+      if (view instanceof GhosttyTerminalView) view.focusInput();
     }, 100);
   }
 

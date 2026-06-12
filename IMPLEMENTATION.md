@@ -177,6 +177,9 @@ struct StyleRun {            // 12 bytes, variable count per row
 
 ## Work Items
 
+For the exact current repo state, latest visual feedback, and resume notes, see
+[HANDOFF.md](HANDOFF.md).
+
 ### 1. MacPorts ✅
 
 - [x] `sudo port install zig` — 0.16.0 already available, no custom port needed
@@ -210,22 +213,37 @@ struct StyleRun {            // 12 bytes, variable count per row
 
 Replace `<pre>` + `dumpViewport()` plain text with a Canvas 2D renderer:
 
-- [ ] Measure monospace char dimensions once on init; remeasure on resize
-- [ ] Each frame: call `takeDirtyViewportRows()` → only repaint changed rows
-- [ ] Per dirty row: fetch text (`dumpViewportRow`) + style runs (`dumpViewportRowStyleRuns`)
-- [ ] Zip text characters with style runs → `fillText` per run with `fillRect` background
-- [ ] Apply flags: bold → `font-weight: bold`, italic → `font-style: italic`, underline/strikethrough → `strokeLine`
-- [ ] Handle scroll delta via `takeViewportScrollDelta()` → shift canvas without full repaint
-- [ ] Cursor: overlay block cursor at `cursorPosition()` coords
+- [x] Measure monospace char dimensions once on init; remeasure on resize
+- [x] Each frame: call `takeDirtyViewportRows()` -> only repaint changed rows
+- [x] Per dirty row: fetch text (`dumpViewportRow`) + style runs (`dumpViewportRowStyleRuns`)
+- [x] Zip text characters with style runs -> `fillText` per run with `fillRect` background
+- [x] Apply flags: bold -> `font-weight: bold`, italic -> `font-style: italic`, underline/strikethrough -> line strokes
+- [ ] Handle scroll delta via `takeViewportScrollDelta()` -> shift canvas without full repaint. Current code detects scroll deltas but forces repaint instead of shifting pixels.
+- [x] Cursor: overlay block cursor at `cursorPosition()` coords
+- [ ] Fix terminal-cell fidelity for wide glyphs, emoji, combining marks, dense tables, and long prompt/status rows. See `HANDOFF.md` for the latest visual symptoms.
+
+#### Font Strategy (design decision)
+
+The Canvas renderer reads font settings directly from `~/.config/ghostty/config` at plugin startup rather than inheriting from Obsidian's CSS theme. This is an intentional design choice:
+
+- **Why**: The terminal exists to mirror Ghostty. Using the same font family and size produces identical character density, glyph shapes, and Nerd Font icons. Obsidian's CSS theme is irrelevant — `--font-monospace` and `--line-height-normal` are for Obsidian's own UI, not a terminal emulator.
+- **Implementation** (`parseGhosttyConfig` + `resolveFontFamily` in `main.ts`):
+  1. Read `font-family` and `font-size` from `~/.config/ghostty/config` (falls back to `~/Library/Application Support/com.mitchellh.ghostty/config`)
+  2. Ghostty stores font-family as the PostScript/filename form (e.g. `SauceCodeProNerdFontMono-Regular`). Canvas needs the CSS family name but we assign our own (`GhosttyTerminalFont`) when loading via FontFace — no `fc-list` needed.
+  3. Fall back to `monospace` at 13px if the config is absent or unreadable.
+  4. Store as `GhosttyPlugin.terminalFont: { family, size }` and use in every `getCanvasFont()` call.
+- **Row height**: `Math.ceil(fontBoundingBoxAscent + fontBoundingBoxDescent)` with no extra leading. Ghostty uses the font's own line box with no added leading; we match that exactly.
+- **Future**: Add plugin settings to override `terminalFont` without editing the Ghostty config (useful for people who want a different size in the panel vs. their main terminal).
 
 ### 5. Hyperlink Hit-Testing (the Claude Code integration piece)
 
-- [ ] `mousemove`: convert pixel (x,y) → (col, row); call `hyperlinkAt()` → show pointer + underline
-- [ ] `click`: resolve URI type:
-  - `file:///path/to/file` or bare path → `app.vault.getAbstractFileByPath()` → open as Obsidian note or reveal in file explorer
-  - `https://` / `http://` → `window.open()` in default browser
-  - Relative paths (e.g. `src/foo.ts:42`) → resolve against vault root or active file
-- [ ] Show URI in a tooltip or status bar on hover
+- [x] `mousemove`: convert pixel (x,y) -> (col, row); call `hyperlinkAt()` -> show pointer + underline
+- [x] `click`: resolve URI type:
+  - `file:///path/to/file` or bare path -> `app.vault.getAbstractFileByPath()` -> open as Obsidian note
+  - `https://` / `http://` -> `window.open()` in default browser
+  - Relative paths (e.g. `src/foo.ts:42`) -> resolve against vault root or active file
+- [x] Show URI in a tooltip on hover
+- [ ] Verify against real Claude/Codex OSC 8 output and decide behavior for non-vault files.
 
 ### 6. Claude Code UX (from obsidian-claude-sidebar)
 
@@ -237,9 +255,10 @@ Replace `<pre>` + `dumpViewport()` plain text with a Canvas 2D renderer:
 
 ### 7. Theme Integration
 
-- [ ] Read Obsidian CSS variables `--text-normal`, `--background-primary` for default fg/bg
-- [ ] Pass to `ghostty_vt_terminal_set_default_colors()` on init
-- [ ] Observe theme changes → re-pass colors + trigger full repaint
+- [x] Read Obsidian CSS-derived foreground/background for default fg/bg
+- [x] Pass to `ghostty_vt_terminal_set_default_colors()` on init
+- [x] Observe theme changes -> re-pass colors + trigger full repaint
+- [x] Colors: read `theme` and `palette` from `~/.config/ghostty/config`; load theme file from Ghostty app bundle; apply via OSC 4 sequences at session start. `foreground`/`background` from theme override Obsidian CSS defaults.
 
 ### 8. Distribution
 
@@ -253,8 +272,8 @@ Native `.node` files can't ship via the community store's `main.js`-only constra
 ## Build Flow (target state)
 
 ```bash
-# Prerequisites (once)
-sudo port install zig             # Zig 0.16.0 — compiler for libghostty_vt.a
+# Prerequisites are vendored for this project.
+# Native builds use vendor/zig/0.15.2/zig.
 
 # Project setup (once)
 npm install
@@ -262,6 +281,10 @@ npm run build:native:electron     # zig build → libghostty_vt.a → node-gyp �
 npm run build:pty:electron        # rebuild node-pty against Electron 39 headers
 
 # Development
+make reinstall                    # fast JS/CSS sync into the default vault
+make reinstall-runtime            # JS/CSS + current native addon + node-pty sync
+make install                      # build JS, rebuild native addon/node-pty, sync all
+make check                        # type-check + bundle
 npm run dev                       # watch + rebuild main.js on change
 
 # Production

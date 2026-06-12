@@ -50,6 +50,7 @@ public:
             InstanceMethod("resize", &GhosttyTerminal::Resize),
             InstanceMethod("scrollViewport", &GhosttyTerminal::ScrollViewport),
             InstanceMethod("dumpViewport", &GhosttyTerminal::DumpViewport),
+            InstanceMethod("dumpViewportRow", &GhosttyTerminal::DumpViewportRow),
             InstanceMethod("cursorPosition", &GhosttyTerminal::CursorPosition),
             InstanceMethod("dumpViewportRowStyleRuns", &GhosttyTerminal::DumpViewportRowStyleRuns),
             InstanceMethod("takeDirtyViewportRows", &GhosttyTerminal::TakeDirtyViewportRows),
@@ -169,6 +170,23 @@ private:
     ghostty_vt_bytes_free(viewport);
     return Napi::String::New(env, output);
   }
+
+  Napi::Value DumpViewportRow(const Napi::CallbackInfo &info) {
+    Napi::Env env = info.Env();
+    if (!terminal_ || info.Length() < 1 || !info[0].IsNumber()) {
+      return Napi::String::New(env, "");
+    }
+
+    uint16_t row = static_cast<uint16_t>(info[0].As<Napi::Number>().Uint32Value());
+    ghostty_vt_bytes_t bytes = ghostty_vt_terminal_dump_viewport_row(terminal_, row);
+    std::string output;
+    if (bytes.ptr && bytes.len > 0) {
+      output.assign(reinterpret_cast<const char *>(bytes.ptr), bytes.len);
+    }
+    ghostty_vt_bytes_free(bytes);
+    return Napi::String::New(env, output);
+  }
+
   Napi::Value CursorPosition(const Napi::CallbackInfo &info) {
     Napi::Env env = info.Env();
     Napi::Object result = Napi::Object::New(env);
