@@ -19,6 +19,7 @@
 /native/ghostty_vt/zig/zig-pkg/
 /native/ghostty_vt/zig/.zig-cache/
 /vendor/zig/*/zig
+/vendor/zig/*/doc/
 
 # Tool caches
 /.cache/
