@@ -22,6 +22,8 @@
 
 # Tool caches
 /.cache/
+/.zig-cache/
+/.zig-shim/
 .eslintcache
 *.tsbuildinfo
 

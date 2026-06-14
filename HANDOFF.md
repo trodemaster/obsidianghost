@@ -1,44 +1,41 @@
 # Handoff - obsidianghost
 
-As of 2026-06-12.
+As of 2026-06-14.
 
 ## Repository State
 
-- Repo: https://github.com/blake_adobe/obsidianghost
-- Branch: `main`, tracking `origin/main`
-- Last committed and pushed baseline: `24ea28d4 Snapshot current plugin state`
-- Current work is intentionally uncommitted. Do not assume `main` on GitHub has the renderer work yet.
-- Default local vault: `/Users/blake/Developer/orac`
-- Local plugin id: `obsidian-claude-ghostty`
-- Local plugin install path: `/Users/blake/Developer/orac/.obsidian/plugins/obsidian-claude-ghostty`
+- Canonical repo: https://github.com/blake_adobe/obsidianghost (not accessible from this machine — blake_adobe is a GitHub Enterprise account)
+- PR remote: https://github.com/trodemaster/obsidianghost (pushable from this machine; use for occasional upstream PRs)
+- Local remotes: `trodemaster` (push/pull), `blake_adobe` (reference only)
+- Branch: `main`, tracking `trodemaster/main`
+- Last commit: `063525f0 Canvas renderer with Ghostty font, theme palette, and multi-tab support`
+- Working tree: clean — all source including Canvas renderer is committed
 
-Current uncommitted source changes:
+## Plugin Install Architecture
 
-- `main.ts` — Canvas renderer, dirty-row redraws, theme colors, cursor overlay, OSC 8 hover/click handling, Ghostty-font loading.
-- `native/ghostty.ts` — TypeScript surface for `dumpViewportRow`.
-- `native/ghostty_vt.cc` — N-API method for `dumpViewportRow`.
-- `native/ghostty_vt/zig/lib.zig` — fixed row dump range; bold→bright palette fix.
-- `styles.css` — Canvas terminal screen styles and link tooltip styles.
-- `tsconfig.json` — adds Node types.
-- `README.md` — Makefile development loop.
-- `Makefile` — local build/install shortcuts.
-- `IMPLEMENTATION.md`, `AGENTS.md`, `CLAUDE.md`, and this file — resume documentation.
+The plugin is installed once to a central directory and each vault symlinks into it:
 
-Generated artifacts are ignored and should not be committed:
+- **Central install**: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`
+- **orac vault**: `~/orac/.obsidian/plugins/obsidian-claude-ghostty` → central dir ✅
+- **daneel vault**: `~/daneel/.obsidian/plugins/obsidian-claude-ghostty` → central dir ✅
+
+To add a new vault: `make setup-vaults` (idempotent) or manually symlink.
+
+## Generated Artifacts (not committed)
 
 - `main.js`
 - `native/ghostty_vt.node`
 - `build/`
 - `node_modules/`
-- Zig caches and outputs
+- `.zig-cache/`, `.zig-shim/`
+- `native/ghostty_vt/zig-out/`
 - `vendor/zig/*/zig`
 - `.env`, `.env.*`, `.envrc`
 
 ## What Works Now
 
 - Plugin loads in Obsidian.
-- PTY-backed Ghostty terminal view renders live shell/Claude terminal content.
-- Old `<pre>` viewport dump replaced by Canvas 2D renderer.
+- PTY-backed Ghostty terminal view renders live shell/Claude terminal content via Canvas 2D renderer.
 - Rendering pipeline:
   - `takeDirtyViewportRows(rows)` — only repaint changed rows
   - `dumpViewportRow(row)` — row text
@@ -54,7 +51,7 @@ Generated artifacts are ignored and should not be committed:
 - Font loads from `~/.config/ghostty/config` (`font-family` + `font-size`). PostScript name resolved to file path by filesystem search; loaded via FontFace with base64 data URI. Internal CSS name `GhosttyTerminalFont` assigned to avoid system name resolution. Currently: `SauceCodeProNerdFontMono-Regular` at 18px.
 - Row height from `fontBoundingBoxAscent + fontBoundingBoxDescent` (font's native line box, no extra leading).
 - Ribbon icon (ghost) in left sidebar toggles the terminal.
-- Tab title and view header driven by `getDisplayText()` which tracks `sessionTitle`. Starts as "Claude"; updates live from OSC 0/2 window title sequences (Starship sets this on directory change; Claude Code sets it during sessions).
+- Tab title and view header driven by `getDisplayText()` which tracks `sessionTitle`. Starts as "Claude"; updates live from OSC 0/2 window title sequences.
 
 ## Latest Visual State
 
@@ -81,26 +78,39 @@ Full local install, including native addon and node-pty rebuilds:
 make install
 ```
 
+Native-only rebuild (Zig + node-gyp; auto-downloads Zig 0.15.2 if missing):
+
+```bash
+make native
+make pty
+```
+
+Set up vault symlinks (idempotent):
+
+```bash
+make setup-vaults
+```
+
 Useful checks:
 
 ```bash
 make check
 npx tsc --noEmit
-npm run build
-npm run build:native:electron
-npm run build:pty:electron
 ```
 
 Notes:
 
-- Native builds use the pinned Zig binary at `vendor/zig/0.15.2/zig`.
+- `make native` downloads Zig 0.15.2 (aarch64-macos) into `vendor/zig/0.15.2/` automatically if not present.
+- `make native` injects a `.zig-shim/xcrun` wrapper so Zig 0.15's SDK probe gets `MacOSX15.4.sdk` instead of the macOS 26.5 SDK name it doesn't recognize.
+- `npm run build:native:electron` also works (same xcrun shim injected via `scripts/build-ghostty-vt.mjs`).
 - After copying a new `.node` file into Obsidian, restart Obsidian or disable/enable the plugin so Electron unloads the old native module.
 - To reload only JS/CSS without restarting Obsidian: open the command palette (`Cmd+P`) and run **"Reload app without saving"**.
 
 ## Recommended Next Steps
 
-1. **Verify and fix character density** — measure `charWidth` and `charHeight` from Canvas against what Ghostty computes via CoreText for `SauceCodePro Nerd Font Mono` at 18pt. Key question: does Canvas `fontBoundingBoxAscent + fontBoundingBoxDescent` equal Ghostty's row pitch for this font, or is there a small systematic offset?
-2. **Wide glyph support** — `rowTextToCells()` needs grapheme-cluster awareness for emoji, Nerd Font icons (which are often single-width despite appearing wider), and combining marks.
-3. **Plugin settings panel** — let user override font-family and font-size without editing the Ghostty config directly.
-4. **Claude Code UX** — Cmd+J toggle, right-click "Open Claude here", `claude --continue` on vault open.
-5. **Commit** — once density is acceptable, commit all source and markdown changes (not build artifacts).
+1. **Verify build on macOS 26 / aarch64** — run `make native` on a clean tree to confirm the Zig auto-download and xcrun shim work end-to-end.
+2. **Verify and fix character density** — measure `charWidth` and `charHeight` from Canvas against what Ghostty computes via CoreText for `SauceCodePro Nerd Font Mono` at 18pt.
+3. **Wide glyph support** — `rowTextToCells()` needs grapheme-cluster awareness.
+4. **Remove debug logging** — `console.log` in `ensureFontLoaded()` and `getCharSize()`.
+5. **Plugin settings panel** — let user override font-family and font-size without editing the Ghostty config.
+6. **Claude Code UX** — Cmd+J toggle, right-click "Open Claude here", `claude --continue` on vault open.
