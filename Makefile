@@ -4,7 +4,10 @@ SHELL := /bin/bash
 PLUGIN_ID  := obsidian-claude-ghostty
 PLUGIN_DIR := $(HOME)/Developer/machine-cfg/obsisian/plugins/$(PLUGIN_ID)
 
-# Obsidian vaults that get a symlink into the central plugin dir
+THEME_NAME := Nocturnal Winter
+THEME_DIR  := $(HOME)/Developer/machine-cfg/obsisian/themes/$(THEME_NAME)
+
+# Obsidian vaults that get symlinks into the central plugin and theme dirs
 VAULTS := $(HOME)/orac $(HOME)/daneel
 
 # ── Zig 0.15.2 ───────────────────────────────────────────────────────────────
@@ -28,7 +31,7 @@ STAMP := node_modules/.install-stamp
 
 .PHONY: help print-vars deps check build native pty install reinstall \
         reinstall-runtime sync-plugin sync-native sync-node-pty \
-        setup-vaults clean dev ensure-plugin-dir
+        setup-vaults setup-themes clean dev ensure-plugin-dir
 
 help:
 	@printf '%s\n' \
@@ -37,6 +40,7 @@ help:
 		'  make reinstall          Fast loop: build JS and sync manifest/styles/main.js' \
 		'  make reinstall-runtime  Sync JS plus current native addon and node-pty payload' \
 		'  make setup-vaults       Create plugin symlinks in orac and daneel vaults' \
+		'  make setup-themes       Create Nocturnal Winter theme symlinks in orac and daneel vaults' \
 		'  make check              Type-check and build the plugin bundle' \
 		'  make native             Rebuild libghostty-vt + ghostty_vt.node for Obsidian Electron' \
 		'  make pty                Rebuild node-pty for Obsidian Electron' \
@@ -124,6 +128,19 @@ setup-vaults:
 	    printf 'WARN  %s exists but is not a symlink — skipping\n' "$$target"; \
 	  else \
 	    ln -s "$(PLUGIN_DIR)" "$$target" && printf 'link  %s\n' "$$target"; \
+	  fi; \
+	done
+
+setup-themes:
+	@for v in $(VAULTS); do \
+	  target="$$v/.obsidian/themes/$(THEME_NAME)"; \
+	  if [ -L "$$target" ]; then \
+	    printf 'skip  %s (symlink exists)\n' "$$target"; \
+	  elif [ -e "$$target" ]; then \
+	    printf 'WARN  %s exists but is not a symlink — skipping\n' "$$target"; \
+	  else \
+	    mkdir -p "$$v/.obsidian/themes" && \
+	    ln -s "$(THEME_DIR)" "$$target" && printf 'link  %s\n' "$$target"; \
 	  fi; \
 	done
 
