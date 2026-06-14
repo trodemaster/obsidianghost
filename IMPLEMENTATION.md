@@ -261,6 +261,41 @@ The Canvas renderer reads font settings directly from `~/.config/ghostty/config`
 - [x] Observe theme changes -> re-pass colors + trigger full repaint
 - [x] Colors: read `theme` and `palette` from `~/.config/ghostty/config`; load theme file from Ghostty app bundle; apply via OSC 4 sequences at session start. `foreground`/`background` from theme override Obsidian CSS defaults.
 
+#### Active Theme: Nocturnal Winter
+
+Config: `~/.config/ghostty/config`
+
+```
+theme = Nocturnal Winter
+font-family = SauceCodeProNerdFontMono-Regular
+font-size = 18
+```
+
+Theme file: `/Applications/Ghostty.app/Contents/Resources/ghostty/themes/Nocturnal Winter`
+
+| Index | Hex | Role |
+|---|---|---|
+| 0 | `#4d4d4d` | black |
+| 1 | `#f12d52` | red |
+| 2 | `#09cd7e` | green |
+| 3 | `#f5f17a` | yellow |
+| 4 | `#3182e0` | blue |
+| 5 | `#ff2b6d` | magenta |
+| 6 | `#09c87a` | cyan |
+| 7 | `#fcfcfc` | white |
+| 8 | `#808080` | bright black |
+| 9 | `#f16d86` | bright red |
+| 10 | `#0ae78d` | bright green |
+| 11 | `#fffc67` | bright yellow |
+| 12 | `#6096ff` | bright blue |
+| 13 | `#ff78a2` | bright magenta |
+| 14 | `#0ae78d` | bright cyan |
+| 15 | `#ffffff` | bright white |
+| fg | `#e6e5e5` | foreground |
+| bg | `#0d0d17` | background |
+| cursor | `#e6e5e5` / text `#a6a6a6` | cursor |
+| selection | `#adbdd0` / fg `#000000` | selection |
+
 ### 8. Distribution
 
 Native `.node` files can't ship via the community store's `main.js`-only constraint.
