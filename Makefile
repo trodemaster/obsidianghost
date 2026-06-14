@@ -40,7 +40,7 @@ help:
 		'  make reinstall          Fast loop: build JS and sync manifest/styles/main.js' \
 		'  make reinstall-runtime  Sync JS plus current native addon and node-pty payload' \
 		'  make setup-vaults       Create plugin symlinks in orac and daneel vaults' \
-		'  make setup-themes       Create Nocturnal Winter theme symlinks in orac and daneel vaults' \
+		'  make setup-themes       Create Nocturnal Winter theme symlinks in orac and daneel vaults (then select once in Settings → Appearance)' \
 		'  make check              Type-check and build the plugin bundle' \
 		'  make native             Rebuild libghostty-vt + ghostty_vt.node for Obsidian Electron' \
 		'  make pty                Rebuild node-pty for Obsidian Electron' \
