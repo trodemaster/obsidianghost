@@ -180,11 +180,12 @@ struct StyleRun {            // 12 bytes, variable count per row
 For the exact current repo state, latest visual feedback, and resume notes, see
 [HANDOFF.md](HANDOFF.md).
 
-### 1. MacPorts ✅
+### 1. Toolchain ✅
 
-- [x] `sudo port install zig` — 0.16.0 already available, no custom port needed
-- [x] No MacPorts port for libghostty — built from vendored source at `npm run build:native`
-- **Note:** Zig 0.16.0 (MacPorts) does NOT build Ghostty v1.3.1 — `std.Io` / `std.posix` breaking changes. Pinned to **Zig 0.15.2** (latest in the 0.15.x line) at `vendor/zig/0.15.2/`. Ghostty's 0.16 migration is in-progress for v1.4.0 (issue #12228). Upgrade path: re-vendor Ghostty v1.4.0 + bump `minimum_zig_version` to 0.16.
+- [x] Zig 0.15.2 auto-downloaded for aarch64-macos by `make native` (no MacPorts dependency)
+- [x] No MacPorts port for libghostty — built from vendored Ghostty source via `zig build`
+- [x] xcrun shim injected during Zig build so macOS 26 SDK probe returns MacOSX15.4.sdk (Zig 0.15 doesn't recognise the macOS 26 SDK name)
+- **Note:** Zig 0.16 does NOT build Ghostty v1.3.1 (`std.Io` / `std.posix` breaking changes). Pinned at 0.15.2. Upgrade path: re-vendor Ghostty v1.4.0 + bump `minimum_zig_version = "0.16"`.
 
 ### 2. Fork and Update Reference Repo ✅
 
@@ -195,8 +196,8 @@ For the exact current repo state, latest visual feedback, and resume notes, see
 - [x] Rebuilt node-pty against Electron 39.8.3 / ABI 140
 - [x] Updated `obsidian` devDep to 1.12.x types
 - [x] Removed `bootstrap-zig.mjs`; `build-ghostty-vt.mjs` resolves pinned `vendor/zig/0.15.2/zig`
-- [x] `libghostty_vt.a` (4.3 MB) + `ghostty_vt.node` (988 KB) build clean
-- [x] Plugin installed and live in `/Users/blake/Developer/orac/.obsidian/plugins/obsidian-claude-ghostty/`
+- [x] `libghostty_vt.a` (4.3 MB) + `ghostty_vt.node` (972 KB) build clean on aarch64
+- [x] Plugin installed to `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`; orac and daneel vaults symlink into it
 - [x] Gate passed: live shell renders in vault, viewport dump confirms prompt
 
 ### 3. Expand N-API Addon (`ghostty_vt.cc`) ✅
@@ -269,24 +270,20 @@ Native `.node` files can't ship via the community store's `main.js`-only constra
 
 ---
 
-## Build Flow (target state)
+## Build Flow
 
 ```bash
-# Prerequisites are vendored for this project.
-# Native builds use vendor/zig/0.15.2/zig.
+# Fresh clone (downloads Zig 0.15.2 aarch64, builds both .node files, syncs to machine-cfg)
+make install
 
-# Project setup (once)
-npm install
-npm run build:native:electron     # zig build → libghostty_vt.a → node-gyp → ghostty_vt.node
-npm run build:pty:electron        # rebuild node-pty against Electron 39 headers
+# Set up vault symlinks (orac + daneel → machine-cfg central dir)
+make setup-vaults
 
-# Development
-make reinstall                    # fast JS/CSS sync into the default vault
-make reinstall-runtime            # JS/CSS + current native addon + node-pty sync
-make install                      # build JS, rebuild native addon/node-pty, sync all
-make check                        # type-check + bundle
-npm run dev                       # watch + rebuild main.js on change
-
-# Production
-npm run build
+# Development loop
+make reinstall          # rebuild JS and sync (most common)
+make reinstall-runtime  # rebuild JS + sync current .node files
+make native             # rebuild ghostty_vt.node (Zig or C++ changed)
+make pty                # rebuild pty.node (node-pty or Electron bump)
+make check              # type-check + bundle
+npm run dev             # esbuild watch mode
 ```

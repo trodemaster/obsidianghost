@@ -1,34 +1,36 @@
 # obsidianghost
 
-Obsidian plugin that embeds a Ghostty-backed terminal.
+Obsidian plugin that embeds a Claude Code terminal using libghostty-vt (native N-API) + node-pty, with a Canvas renderer and vault-aware OSC 8 hyperlink handling.
 
 ## Project Docs
 
-- [IMPLEMENTATION.md](IMPLEMENTATION.md) - full development spec and work items.
-- [HANDOFF.md](HANDOFF.md) - current status, known rendering issues, build/install notes, and resume steps.
+- [IMPLEMENTATION.md](IMPLEMENTATION.md) — full development spec and work items
+- [HANDOFF.md](HANDOFF.md) — current status, build/install notes, and next steps
 
-## Development
-
-The fast development loop is:
+## Fresh Clone Setup
 
 ```bash
-make reinstall
+make install
 ```
 
-That rebuilds `main.js` and syncs only `manifest.json`, `styles.css`, and
-`main.js` into the local vault plugin directory. It intentionally skips native
-rebuilds.
+Downloads Zig 0.15.2 (aarch64), builds `ghostty_vt.node` and `pty.node` for Electron 39, and syncs everything to the central plugin dir (`~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`).
 
-Use the fuller targets when the runtime pieces change:
+Set up vault symlinks (idempotent):
 
 ```bash
-make reinstall-runtime   # sync current native addon and node-pty too
-make install             # rebuild native addon + node-pty, then sync everything
-make check               # type-check and bundle
+make setup-vaults
 ```
 
-The default vault is `/Users/blake/Developer/orac`. Override it when needed:
+## Development Loop
 
 ```bash
-make reinstall VAULT=/path/to/vault
+make reinstall          # rebuild JS and sync — use this on every TypeScript change
+make reinstall-runtime  # rebuild JS + sync current native binaries
+make native             # rebuild ghostty_vt.node (Zig source changed)
+make pty                # rebuild pty.node (node-pty source/Electron bump)
+make check              # type-check + bundle
+npm run dev             # esbuild watch mode
 ```
+
+After syncing JS, reload in Obsidian via `Cmd+P` → "Reload app without saving".  
+After syncing a new `.node` file, disable/enable the plugin or restart Obsidian.
