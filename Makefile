@@ -19,6 +19,11 @@ ZIG_BUILD_ENV := PATH=$(ZIG_SHIM_DIR):$$PATH ZIG_GLOBAL_CACHE_DIR=$(ZIG_CACHE_DI
 RSYNC        := rsync -a
 RSYNC_DELETE := rsync -a --delete
 
+# Stamp guards npm install so it only runs once (until node_modules is wiped).
+# --ignore-scripts skips node-pty's postinstall node-gyp (wrong runtime target).
+# Native addons are built explicitly via `make native` and `make pty`.
+STAMP := node_modules/.install-stamp
+
 .DEFAULT_GOAL := help
 
 .PHONY: help print-vars deps check build native pty install reinstall \
@@ -28,9 +33,9 @@ RSYNC_DELETE := rsync -a --delete
 help:
 	@printf '%s\n' \
 		'Targets:' \
+		'  make install            Fresh-clone setup: npm install + native + pty + sync all' \
 		'  make reinstall          Fast loop: build JS and sync manifest/styles/main.js' \
 		'  make reinstall-runtime  Sync JS plus current native addon and node-pty payload' \
-		'  make install            Full local install: build JS, rebuild native/pty, sync all' \
 		'  make setup-vaults       Create plugin symlinks in orac and daneel vaults' \
 		'  make check              Type-check and build the plugin bundle' \
 		'  make native             Rebuild libghostty-vt + ghostty_vt.node for Obsidian Electron' \
@@ -44,8 +49,11 @@ print-vars:
 	@printf 'PLUGIN_ID=%s\nPLUGIN_DIR=%s\nVAULTS=%s\nZIG=%s\n' \
 		"$(PLUGIN_ID)" "$(PLUGIN_DIR)" "$(VAULTS)" "$(ZIG)"
 
-deps:
-	npm install
+$(STAMP):
+	npm install --ignore-scripts
+	touch $@
+
+deps: $(STAMP)
 
 check:
 	npx tsc --noEmit
@@ -69,7 +77,7 @@ $(ZIG_SHIM_DIR)/xcrun: Makefile
 
 # ── native addon ──────────────────────────────────────────────────────────────
 
-native: $(ZIG) $(ZIG_SHIM_DIR)/xcrun
+native: $(STAMP) $(ZIG) $(ZIG_SHIM_DIR)/xcrun
 	cd native/ghostty_vt/zig && \
 	  $(ZIG_BUILD_ENV) $(ZIG) build -Doptimize=ReleaseFast --prefix ../zig-out
 	rm -rf /tmp/zig-extract && mkdir /tmp/zig-extract
@@ -82,12 +90,12 @@ native: $(ZIG) $(ZIG_SHIM_DIR)/xcrun
 
 # ── node-pty ─────────────────────────────────────────────────────────────────
 
-pty:
+pty: $(STAMP)
 	npm_config_devdir=/tmp/node-gyp npm run build:pty:electron
 
 # ── install ──────────────────────────────────────────────────────────────────
 
-install: build native pty sync-plugin sync-native sync-node-pty
+install: $(STAMP) build native pty sync-plugin sync-native sync-node-pty
 
 reinstall: build sync-plugin
 
