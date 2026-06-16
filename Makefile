@@ -121,12 +121,17 @@ ensure-plugin-dir:
 
 setup-vaults:
 	@for v in $(VAULTS); do \
+	  if [ ! -d "$$v" ]; then \
+	    printf 'WARN  vault not found: %s — skipping\n' "$$v"; \
+	    continue; \
+	  fi; \
 	  target=$$v/.obsidian/plugins/$(PLUGIN_ID); \
 	  if [ -L "$$target" ]; then \
 	    printf 'skip  %s (symlink exists)\n' "$$target"; \
 	  elif [ -e "$$target" ]; then \
 	    printf 'WARN  %s exists but is not a symlink — skipping\n' "$$target"; \
 	  else \
+	    mkdir -p "$$v/.obsidian/plugins" && \
 	    ln -s "$(PLUGIN_DIR)" "$$target" && printf 'link  %s\n' "$$target"; \
 	  fi; \
 	done
