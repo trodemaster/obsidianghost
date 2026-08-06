@@ -1,15 +1,14 @@
 # Handoff - obsidianghost
 
-As of 2026-08-05.
+As of 2026-08-06.
 
 ## Repository State
 
 - Canonical repo: https://github.com/blake_adobe/obsidianghost (not accessible from this machine — blake_adobe is a GitHub Enterprise account)
 - PR remote: https://github.com/trodemaster/obsidianghost (pushable from this machine; use for occasional upstream PRs)
-- Local remotes: `trodemaster` (push/pull), `blake_adobe` (reference only)
-- Branch: `main`, tracking `trodemaster/main`
-- Last commit: `063525f0 Canvas renderer with Ghostty font, theme palette, and multi-tab support`
-- Working tree: clean as of this commit — text-selection + clipboard implementation (see below) is committed and manually verified in a live Obsidian session (daneel vault). Builds clean (`npm run build`); synced to the machine-cfg plugin dir via `make reinstall`. `npx tsc --noEmit` reports a pre-existing, unrelated error (`document.fonts.add` — stale `lib.dom.d.ts` typing, present on `main` before this session too); esbuild bundling is unaffected.
+- Local remotes: only `origin`, pointing to `https://github.com/trodemaster/obsidianghost.git` (the `trodemaster`/`blake_adobe` remote *names* mentioned above don't actually exist as separate git remotes on this machine — `git push origin main` is what works)
+- Branch: `main`, tracking `origin/main`
+- Working tree: clean as of this commit. Builds clean (`npm run build`); synced to the machine-cfg plugin dir via `make reinstall`. `npx tsc --noEmit` reports a pre-existing, unrelated error (`document.fonts.add` — stale `lib.dom.d.ts` typing, predates this session); esbuild bundling is unaffected.
 
 ## Plugin Install Architecture
 
@@ -47,7 +46,7 @@ To add a new vault: `make setup-vaults` (idempotent) or manually symlink.
 - Terminal foreground and background read from Ghostty theme (`foreground`/`background` keys); fall back to Obsidian CSS background.
 - ANSI palette (colors 0–15) read from `~/.config/ghostty/config`: `theme = <name>` loads theme file from Ghostty app bundle; `palette = N=#RRGGBB` entries override per-index. Applied via OSC 4 sequences at session start so the VT palette matches real Ghostty.
 - Characters are rendered cell-by-cell at `col * charWidth` (no Canvas advance-width drift).
-- OSC 8 links: hover shows pointer + tooltip; click opens vault files or external URLs.
+- **Clickable links, Cmd/Ctrl+click (verified live in daneel vault)**: matches real Ghostty/iTerm2's convention — links only light up (underline + pointer cursor + tooltip) while Cmd (or Ctrl) is held, so a bare click stays free for normal terminal interaction (text selection, cursor positioning). Covers both OSC 8 hyperlinks (`findOsc8LinkAt`, via `vt.hyperlinkAt`) and plain-text URLs Claude Code (or any CLI) prints as bare text (`findPlainUrlLinkAt`, regex-based over `dumpViewportRow` output, trims trailing sentence punctuation/unmatched closing brackets). `handleScreenClick` requires the modifier on the click event itself, not just a stale hover, to avoid opening a link the modifier was released on. A `window`-level keydown/keyup listener (`handleLinkModifierChange`) re-evaluates hover immediately on Cmd/Ctrl press or release even without mouse movement, matching real terminal feel. **Note**: this changed existing OSC 8 behavior — links previously opened on a bare click; they now require the modifier too, for consistency with the new plain-URL links.
 - Font loads from `~/.config/ghostty/config` (`font-family` + `font-size`). PostScript name resolved to file path by filesystem search; loaded via FontFace with base64 data URI. Internal CSS name `GhosttyTerminalFont` assigned to avoid system name resolution. Currently: `SauceCodeProNerdFontMono-Regular` at 18px.
 - Row height from `fontBoundingBoxAscent + fontBoundingBoxDescent` (font's native line box, no extra leading).
 - Ribbon icon (ghost) in left sidebar toggles the terminal.
@@ -66,7 +65,6 @@ As of 2026-06-12: rendering is functionally complete. Font, colors, density, and
 - Scroll delta pixel-shift optimization: current code forces full repaint on scroll instead of shifting canvas pixels.
 - Claude Code UX not yet implemented: right-click "Open Claude here", plugin settings panel, `claude --continue` on vault open.
 - Debug `console.log` statements in `ensureFontLoaded()` and `getCharSize()` should be removed once stable.
- **Clickable links**: OSC 8 hyperlinks already open on click, but plain URLs printed in terminal output (not wrapped in OSC 8 sequences) are not detected or clickable. Need regex-based URL detection over viewport rows, hover underline, and click-to-open — same as OSC 8 path.
 - **Drag and drop — file paths**: Add `dragover`/`drop` listeners on `screenEl`; on file drop, resolve `event.dataTransfer.files[0].path` to a POSIX path string and write it to the PTY (same as typing the path). Multiple files should be space-separated with shell-quoting for paths that contain spaces.
 - **Drag and drop — images**: Same path-insertion behavior as other files. Image files dropped onto the terminal should have their POSIX path written to the PTY so Claude Code picks them up as image context (Claude reads image paths from the prompt). No inline rendering needed.
 
@@ -120,7 +118,13 @@ For changes that need to be verified against a *running* Obsidian instance (keyb
 scripts/live-test.sh scripts/tests/shift-enter.js [vault]   # default vault: daneel
 ```
 
-`scripts/live-test.sh` runs `make reinstall`, `obsidian-cli plugin:reload`, opens a fresh terminal tab (`new-terminal` command, for a clean PTY with current env), then `eval`s the given JS file and prints its returned value as JSON. `scripts/tests/shift-enter.js` is the regression probe for the Shift+Enter/TERM_PROGRAM fix above — checks the env vars a spawned shell sees, and the literal bytes written to the pty for Shift+Enter vs. plain Enter.
+`scripts/live-test.sh` runs `make reinstall`, `obsidian-cli plugin:reload`, opens a fresh terminal tab (`new-terminal` command, for a clean PTY with current env), then `eval`s the given JS file and prints its returned value as JSON. Test scripts under `scripts/tests/`:
+
+- `shift-enter.js` — regression probe for the Shift+Enter/TERM_PROGRAM fix above: checks the env vars a spawned shell sees, and the literal bytes written to the pty for Shift+Enter vs. plain Enter.
+- `plain-url-links.js` — regression probe for the clickable-plain-URL fix above: prints a URL with trailing punctuation via `printf`, checks `findLinkAt` trims it correctly, and drives real `mousemove`/`click` `MouseEvent`s through `screenEl` (with/without `metaKey`) to confirm hover only engages and `window.open` only fires when the modifier is held.
+- `osc8-links.js` — same shape, for OSC 8 hyperlinks. Builds the OSC 8 escape sequence via `printf`'s own `\033` octal-escape parsing (interpreted when the command *runs*, i.e. after Enter) rather than embedding raw ESC bytes in the typed command line — the shell's line editor (zsh's ZLE) treats a literal ESC byte in *typed input* as a meta-key prefix and eats it, silently corrupting the command before it ever executes. (This gotcha only affects test-authoring, not the app itself — the app never types raw escape bytes into the shell.)
+
+All three print `pass: true`/`false` as a top-level field for quick scanning.
 
 For end-to-end confidence beyond the byte-level probe, the fix was also verified by having a test script `pty.write("claude\r")`, wait for boot, type text, dispatch a synthetic Shift+Enter, type more text, then `view.vt.dumpViewportRow(n)` across the viewport to confirm the real `claude` CLI's input box showed both lines unsent (rather than submitting on the first). Not committed as a script (slow — needs network/auth, live LLM calls) — see this session's history to recreate if the byte-level probe ever needs re-corroborating against a real `claude` session.
 

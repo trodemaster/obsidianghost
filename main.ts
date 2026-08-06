@@ -49,6 +49,32 @@ type HoveredLink = {
   endCol: number;
 };
 
+const PLAIN_URL_REGEX = /\bhttps?:\/\/[^\s<>"'`]+/g;
+
+// Strip trailing punctuation a sentence would leave stuck to a URL (a period ending a
+// sentence, a closing paren that opened before the URL, etc.) — same heuristic most
+// autolinkers use.
+function trimTrailingUrlPunctuation(url: string): string {
+  let trimmed = url;
+  while (trimmed.length > 0) {
+    const last = trimmed[trimmed.length - 1];
+    if (".,;:!?'\"".includes(last)) {
+      trimmed = trimmed.slice(0, -1);
+      continue;
+    }
+    if (last === ")" && (trimmed.match(/\(/g)?.length ?? 0) < (trimmed.match(/\)/g)?.length ?? 0)) {
+      trimmed = trimmed.slice(0, -1);
+      continue;
+    }
+    if (last === "]" && (trimmed.match(/\[/g)?.length ?? 0) < (trimmed.match(/\]/g)?.length ?? 0)) {
+      trimmed = trimmed.slice(0, -1);
+      continue;
+    }
+    break;
+  }
+  return trimmed;
+}
+
 type Cell = { col: number; row: number };
 
 class GhosttyTerminalView extends ItemView {
@@ -78,6 +104,7 @@ class GhosttyTerminalView extends ItemView {
   private scrollLines = 0;
   private hoveredLink: HoveredLink | null = null;
   private lastHoverCell: { col: number; row: number } | null = null;
+  private lastHoverModifier = false;
   private fontLoadPromise: Promise<void> | null = null;
   private selectionAnchor: Cell | null = null;
   private selectionFocus: Cell | null = null;
@@ -241,6 +268,10 @@ class GhosttyTerminalView extends ItemView {
     this.screenEl.addEventListener("mousedown", this.handleSelectionMouseDown);
     document.addEventListener("mouseup", this.handleSelectionMouseUp);
     this.screenEl.addEventListener("click", this.handleScreenClick, true);
+    // Global (not scoped to inputEl) so the link-hover cursor/underline updates the instant
+    // Cmd/Ctrl is pressed or released, even if the mouse hasn't moved since.
+    window.addEventListener("keydown", this.handleLinkModifierChange, true);
+    window.addEventListener("keyup", this.handleLinkModifierChange, true);
     this.inputEl.addEventListener("keydown", this.handleKeyDown, true);
     this.inputEl.addEventListener("paste", this.handlePaste, true);
     this.inputEl.addEventListener("input", this.handleInput, true);
@@ -308,6 +339,8 @@ class GhosttyTerminalView extends ItemView {
       this.screenEl.removeEventListener("click", this.handleScreenClick, true);
     }
     document.removeEventListener("mouseup", this.handleSelectionMouseUp);
+    window.removeEventListener("keydown", this.handleLinkModifierChange, true);
+    window.removeEventListener("keyup", this.handleLinkModifierChange, true);
     if (this.inputEl) {
       this.inputEl.removeEventListener("keydown", this.handleKeyDown, true);
       this.inputEl.removeEventListener("paste", this.handlePaste, true);
@@ -857,16 +890,21 @@ class GhosttyTerminalView extends ItemView {
       this.setHoveredLink(null);
       return;
     }
+    const modifierHeld = event.metaKey || event.ctrlKey;
     if (
       this.lastHoverCell?.col === cell.col &&
-      this.lastHoverCell?.row === cell.row
+      this.lastHoverCell?.row === cell.row &&
+      this.lastHoverModifier === modifierHeld
     ) {
       this.positionLinkTooltip(event);
       return;
     }
 
     this.lastHoverCell = cell;
-    this.setHoveredLink(this.findLinkAt(cell.col, cell.row));
+    this.lastHoverModifier = modifierHeld;
+    // Links only light up while Cmd/Ctrl is held — matches real Ghostty/iTerm2, and keeps a
+    // bare click free for normal terminal interaction (positioning, drag-select, etc.).
+    this.setHoveredLink(modifierHeld ? this.findLinkAt(cell.col, cell.row) : null);
     this.positionLinkTooltip(event);
   };
 
@@ -875,13 +913,26 @@ class GhosttyTerminalView extends ItemView {
     this.setHoveredLink(null);
   };
 
+  // Re-evaluates link hover the instant Cmd/Ctrl is pressed or released, without waiting for
+  // the next mousemove (e.g. holding the mouse still and pressing Cmd).
+  private handleLinkModifierChange = (event: KeyboardEvent): void => {
+    if (event.key !== "Meta" && event.key !== "Control") return;
+    if (!this.lastHoverCell) return;
+    const modifierHeld = event.metaKey || event.ctrlKey;
+    if (modifierHeld === this.lastHoverModifier) return;
+    this.lastHoverModifier = modifierHeld;
+    this.setHoveredLink(
+      modifierHeld ? this.findLinkAt(this.lastHoverCell.col, this.lastHoverCell.row) : null
+    );
+  };
+
   private handleScreenClick = (event: MouseEvent): void => {
     if (this.didDragSelect) {
       // Suppress link-open on the click that follows a real drag selection.
       this.didDragSelect = false;
       return;
     }
-    if (!this.hoveredLink) return;
+    if (!this.hoveredLink || !(event.metaKey || event.ctrlKey)) return;
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
@@ -979,6 +1030,10 @@ class GhosttyTerminalView extends ItemView {
   }
 
   private findLinkAt(col: number, row: number): HoveredLink | null {
+    return this.findOsc8LinkAt(col, row) ?? this.findPlainUrlLinkAt(col, row);
+  }
+
+  private findOsc8LinkAt(col: number, row: number): HoveredLink | null {
     if (!this.vt) return null;
     const uri = this.vt.hyperlinkAt(col, row);
     if (!uri) return null;
@@ -997,6 +1052,27 @@ class GhosttyTerminalView extends ItemView {
     }
 
     return { uri, row, startCol, endCol };
+  }
+
+  // Fallback for plain URLs Claude Code (or any CLI) prints as bare text rather than
+  // wrapping in an OSC 8 hyperlink.
+  private findPlainUrlLinkAt(col: number, row: number): HoveredLink | null {
+    if (!this.vt) return null;
+    const { cols } = this.viewportSize;
+    const rowText = this.rowTextToCells(this.vt.dumpViewportRow(row - 1), cols).join("");
+
+    PLAIN_URL_REGEX.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = PLAIN_URL_REGEX.exec(rowText))) {
+      const trimmed = trimTrailingUrlPunctuation(match[0]);
+      if (!trimmed) continue;
+      const startIdx = match.index;
+      const endIdx = startIdx + trimmed.length;
+      if (col - 1 >= startIdx && col - 1 < endIdx) {
+        return { uri: trimmed, row, startCol: startIdx + 1, endCol: endIdx + 1 };
+      }
+    }
+    return null;
   }
 
   private setHoveredLink(link: HoveredLink | null): void {
