@@ -268,6 +268,9 @@ class GhosttyTerminalView extends ItemView {
     this.screenEl.addEventListener("mousedown", this.handleSelectionMouseDown);
     document.addEventListener("mouseup", this.handleSelectionMouseUp);
     this.screenEl.addEventListener("click", this.handleScreenClick, true);
+    this.screenEl.addEventListener("dragover", this.handleDragOver);
+    this.screenEl.addEventListener("dragleave", this.handleDragLeave);
+    this.screenEl.addEventListener("drop", this.handleDrop);
     // Global (not scoped to inputEl) so the link-hover cursor/underline updates the instant
     // Cmd/Ctrl is pressed or released, even if the mouse hasn't moved since.
     window.addEventListener("keydown", this.handleLinkModifierChange, true);
@@ -337,6 +340,9 @@ class GhosttyTerminalView extends ItemView {
       this.screenEl.removeEventListener("mouseleave", this.handleMouseLeave);
       this.screenEl.removeEventListener("mousedown", this.handleSelectionMouseDown);
       this.screenEl.removeEventListener("click", this.handleScreenClick, true);
+      this.screenEl.removeEventListener("dragover", this.handleDragOver);
+      this.screenEl.removeEventListener("dragleave", this.handleDragLeave);
+      this.screenEl.removeEventListener("drop", this.handleDrop);
     }
     document.removeEventListener("mouseup", this.handleSelectionMouseUp);
     window.removeEventListener("keydown", this.handleLinkModifierChange, true);
@@ -1113,6 +1119,48 @@ class GhosttyTerminalView extends ItemView {
       this.pty.write(text);
       event.preventDefault();
       event.stopPropagation();
+    }
+  };
+
+  private handleDragOver = (event: DragEvent): void => {
+    // Without this, the browser's default is to navigate to/open the dropped file.
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    this.screenEl?.addClass("is-drag-over");
+  };
+
+  private handleDragLeave = (): void => {
+    this.screenEl?.removeClass("is-drag-over");
+  };
+
+  private handleDrop = (event: DragEvent): void => {
+    event.preventDefault();
+    this.screenEl?.removeClass("is-drag-over");
+    if (!this.pty) return;
+
+    const files = event.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+
+    // File dropped from Finder gets its POSIX path via Electron's webUtils — inserted as
+    // text (not submitted) so the user can add a prompt around it before pressing Enter,
+    // same as typing or pasting a path. No inline image rendering: Claude Code reads image
+    // paths straight out of the prompt text, so writing the path is all that's needed.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- Electron webUtils needs runtime require() (same pattern as clipboard above); no @types/electron dependency, so cast to the minimal shape we use
+      const { webUtils } = require("electron") as {
+        webUtils: { getPathForFile(file: File): string };
+      };
+      const paths = Array.from(files)
+        .map((file) => webUtils.getPathForFile(file))
+        .filter((path) => path.length > 0)
+        .map((path) => `'${path.replace(/'/g, `'\\''`)}'`);
+
+      if (paths.length > 0) {
+        this.pty.write(paths.join(" "));
+        this.focusInput();
+      }
+    } catch (error) {
+      console.error("[ghostty] Failed to resolve dropped file path:", error);
     }
   };
 
