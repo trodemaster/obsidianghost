@@ -49,6 +49,8 @@ type HoveredLink = {
   endCol: number;
 };
 
+type Cell = { col: number; row: number };
+
 class GhosttyTerminalView extends ItemView {
   private pty: IPty | null = null;
   private vt: GhosttyTerminal | null = null;
@@ -77,6 +79,11 @@ class GhosttyTerminalView extends ItemView {
   private hoveredLink: HoveredLink | null = null;
   private lastHoverCell: { col: number; row: number } | null = null;
   private fontLoadPromise: Promise<void> | null = null;
+  private selectionAnchor: Cell | null = null;
+  private selectionFocus: Cell | null = null;
+  private isSelecting = false;
+  private didDragSelect = false;
+  private lastSelectCell: Cell | null = null;
   private sessionTitle = "Claude";
   private oscTitleBuf = "";
   private oscTitleCapturing = false;
@@ -220,6 +227,8 @@ class GhosttyTerminalView extends ItemView {
       passive: true,
     });
     this.screenEl.addEventListener("mouseleave", this.handleMouseLeave);
+    this.screenEl.addEventListener("mousedown", this.handleSelectionMouseDown);
+    document.addEventListener("mouseup", this.handleSelectionMouseUp);
     this.screenEl.addEventListener("click", this.handleScreenClick, true);
     this.inputEl.addEventListener("keydown", this.handleKeyDown, true);
     this.inputEl.addEventListener("paste", this.handlePaste, true);
@@ -284,8 +293,10 @@ class GhosttyTerminalView extends ItemView {
       this.screenEl.removeEventListener("wheel", this.handleWheel);
       this.screenEl.removeEventListener("mousemove", this.handleMouseMove);
       this.screenEl.removeEventListener("mouseleave", this.handleMouseLeave);
+      this.screenEl.removeEventListener("mousedown", this.handleSelectionMouseDown);
       this.screenEl.removeEventListener("click", this.handleScreenClick, true);
     }
+    document.removeEventListener("mouseup", this.handleSelectionMouseUp);
     if (this.inputEl) {
       this.inputEl.removeEventListener("keydown", this.handleKeyDown, true);
       this.inputEl.removeEventListener("paste", this.handlePaste, true);
@@ -323,6 +334,11 @@ class GhosttyTerminalView extends ItemView {
     this.scrollLines = 0;
     this.hoveredLink = null;
     this.lastHoverCell = null;
+    this.selectionAnchor = null;
+    this.selectionFocus = null;
+    this.isSelecting = false;
+    this.didDragSelect = false;
+    this.lastSelectCell = null;
   }
 
   private scheduleRender(forceFull = false): void {
@@ -362,6 +378,7 @@ class GhosttyTerminalView extends ItemView {
       }
     }
 
+    this.drawSelection();
     this.drawHoveredLink();
     this.updateCaret();
   }
@@ -590,6 +607,82 @@ class GhosttyTerminalView extends ItemView {
     ctx.stroke();
   }
 
+  private drawSelection(): void {
+    const sel = this.normalizedSelection();
+    if (!sel || !this.canvasContext) return;
+    const { startRow, startCol, endRow, endCol } = sel;
+    const { width, height } = this.getCharSize();
+    const { cols, rows } = this.viewportSize;
+    const ctx = this.canvasContext;
+
+    const { selectionBg } = this.plugin.terminalColorConfig;
+    ctx.fillStyle = this.colorToRgba(selectionBg ?? this.themeColors.fg, 0.35);
+
+    for (let row = startRow; row <= endRow; row++) {
+      const rowIndex = row - 1;
+      if (rowIndex < 0 || rowIndex >= rows) continue;
+      const fromCol = row === startRow ? startCol : 1;
+      const toCol = row === endRow ? endCol : cols;
+      if (toCol < fromCol) continue;
+      const x = (fromCol - 1) * width;
+      const y = rowIndex * height;
+      ctx.fillRect(x, y, (toCol - fromCol + 1) * width, height);
+    }
+  }
+
+  // Selection anchor/focus in mousedown/mousemove order; normalize to
+  // top-left → bottom-right (row-major, then column) reading order.
+  private normalizedSelection(): {
+    startRow: number;
+    startCol: number;
+    endRow: number;
+    endCol: number;
+  } | null {
+    if (!this.selectionAnchor || !this.selectionFocus) return null;
+    let a = this.selectionAnchor;
+    let b = this.selectionFocus;
+    if (a.row > b.row || (a.row === b.row && a.col > b.col)) {
+      [a, b] = [b, a];
+    }
+    if (a.row === b.row && a.col === b.col) return null;
+    return { startRow: a.row, startCol: a.col, endRow: b.row, endCol: b.col };
+  }
+
+  private clearSelection(): void {
+    if (!this.selectionAnchor && !this.selectionFocus) return;
+    this.selectionAnchor = null;
+    this.selectionFocus = null;
+    this.scheduleRender(true);
+  }
+
+  private getSelectedText(): string {
+    const sel = this.normalizedSelection();
+    if (!sel || !this.vt) return "";
+    const { startRow, startCol, endRow, endCol } = sel;
+    const { cols } = this.viewportSize;
+
+    const lines: string[] = [];
+    for (let row = startRow; row <= endRow; row++) {
+      const cells = this.rowTextToCells(this.vt.dumpViewportRow(row - 1), cols);
+      const from = row === startRow ? startCol - 1 : 0;
+      const to = row === endRow ? endCol : cols;
+      lines.push(cells.slice(from, to).join("").replace(/\s+$/, ""));
+    }
+    return lines.join("\n");
+  }
+
+  private copyToClipboard(text: string): void {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- Electron clipboard needs runtime require() (same pattern as node-pty above); no @types/electron dependency, so cast to the minimal shape we use
+      const { clipboard } = require("electron") as {
+        clipboard: { writeText(text: string): void };
+      };
+      clipboard.writeText(text);
+    } catch (error) {
+      console.error("[ghostty] Failed to copy selection to clipboard:", error);
+    }
+  }
+
   private drawHoveredLink(): void {
     if (!this.hoveredLink || !this.canvasContext) return;
     const { row, startCol, endCol } = this.hoveredLink;
@@ -743,6 +836,11 @@ class GhosttyTerminalView extends ItemView {
   };
 
   private handleMouseMove = (event: MouseEvent): void => {
+    if (this.isSelecting) {
+      this.updateSelectionDrag(event);
+      return;
+    }
+
     const cell = this.eventToCell(event);
     if (!cell) {
       this.setHoveredLink(null);
@@ -767,6 +865,11 @@ class GhosttyTerminalView extends ItemView {
   };
 
   private handleScreenClick = (event: MouseEvent): void => {
+    if (this.didDragSelect) {
+      // Suppress link-open on the click that follows a real drag selection.
+      this.didDragSelect = false;
+      return;
+    }
     if (!this.hoveredLink) return;
     event.preventDefault();
     event.stopPropagation();
@@ -775,6 +878,56 @@ class GhosttyTerminalView extends ItemView {
       const message = error instanceof Error ? error.message : String(error);
       new Notice(`Failed to open link: ${message}`);
     });
+  };
+
+  private handleSelectionMouseDown = (event: MouseEvent): void => {
+    if (event.button !== 0) return;
+    const cell = this.eventToCellClamped(event);
+    if (!cell) return;
+    event.preventDefault();
+
+    this.clearSelection();
+    this.isSelecting = true;
+    this.didDragSelect = false;
+    this.selectionAnchor = cell;
+    this.selectionFocus = cell;
+    this.lastSelectCell = cell;
+  };
+
+  private updateSelectionDrag(event: MouseEvent): void {
+    const cell = this.eventToCellClamped(event);
+    if (!cell) return;
+    if (this.lastSelectCell?.col === cell.col && this.lastSelectCell?.row === cell.row) {
+      return;
+    }
+    this.lastSelectCell = cell;
+    this.selectionFocus = cell;
+    if (
+      this.selectionAnchor &&
+      (cell.col !== this.selectionAnchor.col || cell.row !== this.selectionAnchor.row)
+    ) {
+      this.didDragSelect = true;
+    }
+    this.scheduleRender(true);
+  }
+
+  private handleSelectionMouseUp = (): void => {
+    if (!this.isSelecting) return;
+    this.isSelecting = false;
+
+    if (!this.didDragSelect) {
+      // Plain click, no drag: clear any stale selection and let the click
+      // handler (link-open) run normally.
+      this.clearSelection();
+      return;
+    }
+
+    const text = this.getSelectedText();
+    if (text) {
+      this.copyToClipboard(text);
+    } else {
+      this.clearSelection();
+    }
   };
 
   private eventToCell(event: MouseEvent): { col: number; row: number } | null {
@@ -795,6 +948,22 @@ class GhosttyTerminalView extends ItemView {
     ) {
       return null;
     }
+    return { col, row };
+  }
+
+  // Like eventToCell but clamps to the viewport bounds instead of returning null,
+  // so dragging a selection past the canvas edge still extends the selection.
+  private eventToCellClamped(event: MouseEvent): Cell | null {
+    if (!this.canvasEl) return null;
+    const rect = this.canvasEl.getBoundingClientRect();
+    const { width, height } = this.getCharSize();
+    const { cols, rows } = this.viewportSize;
+
+    const x = Math.max(0, Math.min(event.clientX - rect.left, rect.width - 1));
+    const y = Math.max(0, Math.min(event.clientY - rect.top, rect.height - 1));
+
+    const col = Math.min(cols, Math.max(1, Math.floor(x / width) + 1));
+    const row = Math.min(rows, Math.max(1, Math.floor(y / height) + 1));
     return { col, row };
   }
 
@@ -871,6 +1040,15 @@ class GhosttyTerminalView extends ItemView {
       event.stopPropagation();
       event.stopImmediatePropagation();
       this.leaf.detach();
+      return;
+    }
+    // Cmd+C: copy selection if one exists; otherwise fall through so the
+    // pty write path below is untouched (Ctrl+C, handled separately, sends ETX).
+    if (event.metaKey && event.key.toLowerCase() === "c" && this.normalizedSelection()) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      this.copyToClipboard(this.getSelectedText());
       return;
     }
     if (event.isComposing || event.key === "Process") {
@@ -1220,6 +1398,13 @@ class GhosttyTerminalView extends ItemView {
   private colorToCss(color: number): string {
     return `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
   }
+
+  private colorToRgba(color: number, alpha: number): string {
+    const r = (color >> 16) & 0xff;
+    const g = (color >> 8) & 0xff;
+    const b = color & 0xff;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
 }
 
 type TerminalFont = {
@@ -1232,6 +1417,14 @@ type GhosttyColorConfig = {
   palette: Map<number, number>; // ANSI palette index 0-255 → 0xRRGGBB
   foreground: number | null;    // default fg (0xRRGGBB), null if not in config/theme
   background: number | null;    // default bg (0xRRGGBB), null if not in config/theme
+  selectionBg: number | null;   // selection-background (0xRRGGBB), null if not in config/theme
+};
+
+const EMPTY_COLOR_CONFIG: GhosttyColorConfig = {
+  palette: new Map(),
+  foreground: null,
+  background: null,
+  selectionBg: null,
 };
 
 // We load the font ourselves via FontFace so we assign our own internal CSS name.
@@ -1256,7 +1449,7 @@ function findGhosttyThemeFile(name: string): string {
 }
 
 function parseColorLines(text: string): GhosttyColorConfig {
-  const result: GhosttyColorConfig = { palette: new Map(), foreground: null, background: null };
+  const result: GhosttyColorConfig = { ...EMPTY_COLOR_CONFIG, palette: new Map() };
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
@@ -1276,6 +1469,9 @@ function parseColorLines(text: string): GhosttyColorConfig {
     } else if (key === "background") {
       const c = parseHexColor(val);
       if (c !== null) result.background = c;
+    } else if (key === "selection-background") {
+      const c = parseHexColor(val);
+      if (c !== null) result.selectionBg = c;
     }
   }
   return result;
@@ -1307,20 +1503,23 @@ function parseGhosttyColorConfig(): GhosttyColorConfig {
       const base: GhosttyColorConfig = themeName
         ? (() => {
             const tf = findGhosttyThemeFile(themeName);
-            return tf ? parseColorLines(readFileSync(tf, "utf8")) : { palette: new Map(), foreground: null, background: null };
+            return tf
+              ? parseColorLines(readFileSync(tf, "utf8"))
+              : { ...EMPTY_COLOR_CONFIG, palette: new Map() };
           })()
-        : { palette: new Map(), foreground: null, background: null };
+        : { ...EMPTY_COLOR_CONFIG, palette: new Map() };
       const overrides = parseColorLines(text);
       // Config entries override theme entries
       for (const [idx, color] of overrides.palette) base.palette.set(idx, color);
       if (overrides.foreground !== null) base.foreground = overrides.foreground;
       if (overrides.background !== null) base.background = overrides.background;
+      if (overrides.selectionBg !== null) base.selectionBg = overrides.selectionBg;
       return base;
     } catch {
       // ignore
     }
   }
-  return { palette: new Map(), foreground: null, background: null };
+  return { ...EMPTY_COLOR_CONFIG, palette: new Map() };
 }
 
 // Search standard macOS font directories for a font by its PostScript/filename stem.
