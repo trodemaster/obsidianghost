@@ -874,7 +874,15 @@ class GhosttyTerminalView extends ItemView {
     if (!title || title === this.sessionTitle) return;
     // Prefer Claude-set titles; strip common shell directory prefixes
     this.sessionTitle = title.length > 40 ? title.slice(0, 38) + "…" : title;
-    this.app.workspace.trigger("layout-change");
+    // Neither is kept in sync with getDisplayText() automatically — each needs its own
+    // explicit refresh:
+    // - Tab label: updateHeader() (undocumented, not in obsidian.d.ts, but present at
+    //   runtime — verified on 1.13.4) re-pulls getDisplayText() into the tab strip.
+    // - View header (the bar above the terminal content, separate DOM from the tab):
+    //   titleEl is only set once by the framework: at initial view creation, not on later
+    //   getDisplayText() changes, so it has to be written directly.
+    (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+    (this as unknown as { titleEl?: HTMLElement }).titleEl?.setText(this.sessionTitle);
   }
 
   private handleFocus = (): void => {
