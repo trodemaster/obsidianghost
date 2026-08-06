@@ -54,6 +54,7 @@ To add a new vault: `make setup-vaults` (idempotent) or manually symlink.
 - Tab title and view header driven by `getDisplayText()` which tracks `sessionTitle`. Starts as "Claude"; updates live from OSC 0/2 window title sequences.
 - Cmd+J closes the terminal leaf while it's focused (`handleKeyDown`); a "Toggle terminal" command is also registered (bindable to any hotkey via Obsidian's own hotkey settings). The `IMPLEMENTATION.md` work-item list still lists "Cmd+J toggle" as outstanding — that's stale, this already works.
 - **Text selection + clipboard (verified live in daneel vault)**: mouse-drag selects a cell range (`selectionAnchor`/`selectionFocus`), painted as a translucent overlay (`drawSelection()`) tinted from Ghostty's `selection-background` theme key (falls back to theme fg @ 35% alpha if absent). Auto-copies to the system clipboard on mouseup after a real drag (via Electron's `clipboard` module, not the web Clipboard API — avoids permission-prompt issues). Cmd+C re-copies the current selection. A plain click (no drag) is left alone so link-opening still works; `didDragSelect` suppresses the link-click handler only when a real drag just happened. Confirmed via `screenshot-window` + manual drag: highlight renders correctly across wrapped lines, and the pasted clipboard content matched the selection exactly (trimmed per-line, multi-line joined).
+- **Shift+Enter inserts a newline instead of submitting (verified live)**: `handleKeyDown` now sends `\x1b\r` (ESC+CR) for Shift+Enter instead of bare `\r` — the same convention real Ghostty/iTerm2/Kitty/WezTerm ship as a default keybinding, which Node's own `readline` keypress parser decodes as `meta+return` (an ESC prefix always means "meta" to it, regardless of the actual key). Claude Code's CLI already treats `meta+return` as "insert newline" — no terminal-specific config or native protocol (Kitty keyboard protocol / CSI u) needed, since our plugin owns the keydown→byte path directly rather than going through a real terminal's own keybinding layer. Also identifies the spawned shell as real Ghostty: `env.TERM_PROGRAM="ghostty"`, `env.TERM_PROGRAM_VERSION="1.3.1"`, and pty `name: "xterm-ghostty"` (node-pty derives `env.TERM` from `name`, clobbering any `env.TERM` set directly — see the comment at the `spawnPty` call in `main.ts`). The `xterm-ghostty` terminfo entry is already installed system-wide by the Ghostty app, so ncurses-based programs (vim, tmux, etc.) resolve it fine. Confirmed by launching the real `claude` CLI inside the pty and driving it via `scripts/live-test.sh scripts/tests/shift-enter.js` (see "Live Testing Loop" below) — pressing Shift+Enter left `line one` / `line two` as two lines in the same unsent input box.
 
 ## Latest Visual State
 
@@ -110,6 +111,18 @@ Notes:
 - `npm run build:native:electron` also works (same xcrun shim injected via `scripts/build-ghostty-vt.mjs`).
 - After copying a new `.node` file into Obsidian, restart Obsidian or disable/enable the plugin so Electron unloads the old native module.
 - To reload only JS/CSS without restarting Obsidian: open the command palette (`Cmd+P`) and run **"Reload app without saving"**.
+
+## Live Testing Loop
+
+For changes that need to be verified against a *running* Obsidian instance (keyboard/mouse handling, PTY env, terminal rendering) without any screen automation or manual clicking: `obsidian-cli` (ships with Obsidian, talks over `~/.obsidian-cli.sock`) can hot-reload the plugin and `eval` arbitrary JS directly in the app's renderer context — including reaching into a live `GhosttyTerminalView` instance (`view.pty`, `view.inputEl`, `view.vt`), monkey-patching `pty.write` to capture bytes, and dispatching real `KeyboardEvent`s through the actual `handleKeyDown` path. No AppleScript, no `cliclick`, no screen coordinates.
+
+```bash
+scripts/live-test.sh scripts/tests/shift-enter.js [vault]   # default vault: daneel
+```
+
+`scripts/live-test.sh` runs `make reinstall`, `obsidian-cli plugin:reload`, opens a fresh terminal tab (`new-terminal` command, for a clean PTY with current env), then `eval`s the given JS file and prints its returned value as JSON. `scripts/tests/shift-enter.js` is the regression probe for the Shift+Enter/TERM_PROGRAM fix above — checks the env vars a spawned shell sees, and the literal bytes written to the pty for Shift+Enter vs. plain Enter.
+
+For end-to-end confidence beyond the byte-level probe, the fix was also verified by having a test script `pty.write("claude\r")`, wait for boot, type text, dispatch a synthetic Shift+Enter, type more text, then `view.vt.dumpViewportRow(n)` across the viewport to confirm the real `claude` CLI's input box showed both lines unsent (rather than submitting on the first). Not committed as a script (slow — needs network/auth, live LLM calls) — see this session's history to recreate if the byte-level probe ever needs re-corroborating against a real `claude` session.
 
 ## Recommended Next Steps
 

@@ -204,11 +204,22 @@ class GhosttyTerminalView extends ItemView {
       adapter.getBasePath?.() || process.env.HOME || process.cwd() || "/";
 
     this.pty = spawnPty(shell, [], {
-      name: "xterm-256color",
+      // node-pty sets env.TERM from `name` unconditionally (unixTerminal.js), clobbering
+      // any TERM passed via `env` below — so TERM has to be driven from here, not there.
+      // "xterm-ghostty" matches real Ghostty's own TERM value and has a terminfo entry
+      // installed system-wide by the Ghostty app already.
+      name: "xterm-ghostty",
       cols,
       rows,
       cwd,
-      env: process.env as Record<string, string>,
+      // Identify as real Ghostty so terminal-aware CLIs (e.g. Claude Code's Shift+Enter /
+      // image-paste detection) treat this session the same way they'd treat a native
+      // Ghostty window, rather than the generic xterm-256color they'd otherwise see.
+      env: {
+        ...process.env,
+        TERM_PROGRAM: "ghostty",
+        TERM_PROGRAM_VERSION: "1.3.1",
+      } as Record<string, string>,
     });
 
     this.pty.onData((data) => {
@@ -1097,6 +1108,12 @@ class GhosttyTerminalView extends ItemView {
       if (code >= 1 && code <= 26) {
         data = String.fromCharCode(code);
       }
+    // Shift+Enter = literal newline in the input, not submit. Ghostty (and iTerm2/Kitty/
+    // WezTerm/Warp) bind this to ESC+CR by default: Node's readline keypress parser treats
+    // an ESC-prefixed key as meta+<key>, so downstream CLIs (e.g. Claude Code) that check for
+    // meta+return already do the right thing here — no terminal-specific config needed.
+    } else if (event.key === "Enter" && event.shiftKey) {
+      data = "\x1b\r";
     } else if (event.key === "Enter") {
       data = "\r";
     } else if (event.key === "Backspace") {
