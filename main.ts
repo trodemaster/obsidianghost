@@ -2,9 +2,13 @@ import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, isAbsolute, join, normalize as normalizeFsPath, relative } from "path";
 import {
+  App,
   ItemView,
+  Menu,
   Notice,
   Plugin,
+  PluginSettingTab,
+  Setting,
   TFile,
   WorkspaceLeaf,
   normalizePath,
@@ -79,6 +83,7 @@ type Cell = { col: number; row: number };
 
 class GhosttyTerminalView extends ItemView {
   private pty: IPty | null = null;
+  private intentionallyKilled = false;
   private vt: GhosttyTerminal | null = null;
   private bodyEl: HTMLElement | null = null;
   private screenEl: HTMLElement | null = null;
@@ -135,8 +140,23 @@ class GhosttyTerminalView extends ItemView {
     contentEl.empty();
     contentEl.addClass("ghostty-terminal-view");
 
-    this.addAction("plus", "New terminal", () => {
+    const newTerminalAction = this.addAction("plus", "New terminal", () => {
       this.plugin.openNewTerminal(this.leaf).catch(console.error);
+    });
+    newTerminalAction.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const menu = new Menu();
+      menu.addItem((item) =>
+        item.setTitle("New Claude session").setIcon("ghost").onClick(() => {
+          this.plugin.openNewTerminal(this.leaf).catch(console.error);
+        })
+      );
+      menu.addItem((item) =>
+        item.setTitle("New shell (no Claude)").setIcon("terminal").onClick(() => {
+          this.plugin.openNewTerminal(this.leaf, { shellOnly: true }).catch(console.error);
+        })
+      );
+      menu.showAtMouseEvent(event);
     });
 
     this.bodyEl = contentEl;
@@ -226,9 +246,8 @@ class GhosttyTerminalView extends ItemView {
       process.env.SHELL ||
       (process.platform === "win32" ? "powershell.exe" : "/bin/zsh");
 
-    const adapter = this.app.vault.adapter as { getBasePath?: () => string };
-    const cwd: string =
-      adapter.getBasePath?.() || process.env.HOME || process.cwd() || "/";
+    const shellOnly = this.plugin.consumeShellOnlyFlag();
+    const cwd = this.plugin.getStartDirectory();
 
     this.pty = spawnPty(shell, [], {
       // node-pty sets env.TERM from `name` unconditionally (unixTerminal.js), clobbering
@@ -249,12 +268,27 @@ class GhosttyTerminalView extends ItemView {
       } as Record<string, string>,
     });
 
+    this.intentionallyKilled = false;
+
     this.pty.onData((data) => {
       if (!this.vt) return;
       this.vt.feed(data);
       this.parseOscTitleFromStream(data);
       this.scheduleRender();
     });
+
+    // Only a natural shell exit (user ran `exit`, or exited Claude and then the shell)
+    // closes the tab — stopSession() sets intentionallyKilled before pty.kill(), which
+    // also fires onExit, so that case is excluded here to avoid detaching an already-
+    // closing (or already-replaced) leaf.
+    this.pty.onExit(() => {
+      if (this.intentionallyKilled) return;
+      this.leaf.detach();
+    });
+
+    if (!shellOnly) {
+      this.pty.write("claude --continue\r");
+    }
 
     this.bodyEl.tabIndex = 0;
     this.bodyEl.addEventListener("mousedown", this.focusTerminal);
@@ -322,6 +356,7 @@ class GhosttyTerminalView extends ItemView {
       this.resizeObserver = null;
     }
     if (this.pty) {
+      this.intentionallyKilled = true;
       try {
         this.pty.kill();
       } catch {
@@ -1718,18 +1753,75 @@ function parseGhosttyConfig(): TerminalFont {
   return { family: "monospace", size: 13, filePath: "" };
 }
 
+interface GhosttyPluginSettings {
+  // Absolute, "~"-prefixed, or vault-root-relative path. Empty string = vault root.
+  startDirectory: string;
+}
+
+const DEFAULT_SETTINGS: GhosttyPluginSettings = {
+  startDirectory: "",
+};
+
+class GhosttySettingTab extends PluginSettingTab {
+  constructor(app: App, private plugin: GhosttyPlugin) {
+    super(app, plugin);
+  }
+
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    new Setting(containerEl)
+      .setName("Start directory")
+      .setDesc(
+        "Working directory new terminals open in — also what `claude --continue` resumes " +
+          "against, since Claude Code's session history is keyed by directory. Absolute path, " +
+          "\"~\"-prefixed, or relative to the vault root. Leave blank for the vault root."
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("(vault root)")
+          .setValue(this.plugin.settings.startDirectory)
+          .onChange(async (value) => {
+            this.plugin.settings.startDirectory = value;
+            await this.plugin.saveSettings();
+          })
+      );
+  }
+}
+
 export default class GhosttyPlugin extends Plugin {
   private nativeState: GhosttyNativeState | null = null;
+  private pendingShellOnly = false;
+  settings: GhosttyPluginSettings = DEFAULT_SETTINGS;
   terminalFont: TerminalFont = parseGhosttyConfig();
   terminalColorConfig: GhosttyColorConfig = parseGhosttyColorConfig();
 
   async onload(): Promise<void> {
+    await this.loadSettings();
+    this.addSettingTab(new GhosttySettingTab(this.app, this));
+
     this.registerView(VIEW_TYPE_GHOSTTY, (leaf: WorkspaceLeaf) => {
       return new GhosttyTerminalView(leaf, this);
     });
 
-    this.addRibbonIcon("ghost", "Open Claude terminal", () => {
+    const ribbonIcon = this.addRibbonIcon("ghost", "Open Claude terminal", () => {
       this.toggleView().catch(console.error);
+    });
+    ribbonIcon.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const menu = new Menu();
+      menu.addItem((item) =>
+        item.setTitle("New Claude session").setIcon("ghost").onClick(() => {
+          this.openNewTerminal().catch(console.error);
+        })
+      );
+      menu.addItem((item) =>
+        item.setTitle("New shell (no Claude)").setIcon("terminal").onClick(() => {
+          this.openNewTerminal(undefined, { shellOnly: true }).catch(console.error);
+        })
+      );
+      menu.showAtMouseEvent(event);
     });
 
     this.addCommand({
@@ -1803,7 +1895,10 @@ export default class GhosttyPlugin extends Plugin {
     }, 100);
   }
 
-  async openNewTerminal(fromLeaf?: WorkspaceLeaf): Promise<void> {
+  async openNewTerminal(
+    fromLeaf?: WorkspaceLeaf,
+    options?: { shellOnly?: boolean }
+  ): Promise<void> {
     const { workspace } = this.app;
     // Anchor leaf: the caller's leaf (from "+" button) or any existing terminal.
     // Setting it active first makes getLeaf("tab") open in the same tab group.
@@ -1817,6 +1912,7 @@ export default class GhosttyPlugin extends Plugin {
       ? workspace.getLeaf("tab")              // new tab in same group
       : workspace.getLeaf("split", "horizontal"); // first ever terminal: bottom split
 
+    this.pendingShellOnly = options?.shellOnly ?? false;
     await newLeaf.setViewState({ type: VIEW_TYPE_GHOSTTY, active: true });
     await workspace.revealLeaf(newLeaf);
 
@@ -1824,6 +1920,36 @@ export default class GhosttyPlugin extends Plugin {
       const view = newLeaf.view;
       if (view instanceof GhosttyTerminalView) view.focusInput();
     }, 100);
+  }
+
+  /** One-shot flag consumed by GhosttyTerminalView.startSession() when a fresh session
+   * spawns; always false for leaves Obsidian restores from a saved workspace layout, so
+   * restored terminals default to `claude --continue`. */
+  consumeShellOnlyFlag(): boolean {
+    const flag = this.pendingShellOnly;
+    this.pendingShellOnly = false;
+    return flag;
+  }
+
+  getStartDirectory(): string {
+    const adapter = this.app.vault.adapter as { getBasePath?: () => string };
+    const vaultRoot = adapter.getBasePath?.() || process.env.HOME || process.cwd() || "/";
+
+    const configured = this.settings.startDirectory.trim();
+    if (!configured) return vaultRoot;
+
+    const expanded = configured.startsWith("~")
+      ? join(homedir(), configured.slice(1))
+      : configured;
+    return isAbsolute(expanded) ? expanded : join(vaultRoot, expanded);
+  }
+
+  async loadSettings(): Promise<void> {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
   }
 
   getNativeState(refresh = false): GhosttyNativeState {

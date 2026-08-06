@@ -24,7 +24,14 @@ cd "$REPO_ROOT"
 make reinstall
 
 "$OBSIDIAN_CLI" plugin:reload id="$PLUGIN_ID" vault="$VAULT" >/dev/null
-"$OBSIDIAN_CLI" command id="$PLUGIN_ID:new-terminal" vault="$VAULT" >/dev/null
+# shellOnly: true — a bootstrap terminal that also auto-launches `claude --continue`
+# would race any claude session the test script itself starts against the same vault
+# directory (observed: both end up contending over the same continuable session and
+# render blank). Test scripts that specifically want to exercise auto-launch should
+# open their own terminal via plugin.openNewTerminal().
+"$OBSIDIAN_CLI" eval \
+  code="app.plugins.getPlugin('$PLUGIN_ID').openNewTerminal(undefined, {shellOnly: true})" \
+  vault="$VAULT" >/dev/null
 
 "$OBSIDIAN_CLI" eval \
   code="eval(require('fs').readFileSync('$TEST_SCRIPT','utf8'))" \
