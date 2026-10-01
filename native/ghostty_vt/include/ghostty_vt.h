@@ -64,6 +64,10 @@ bool ghostty_vt_terminal_cursor_position(ghostty_vt_terminal_t terminal,
 ghostty_vt_bytes_t ghostty_vt_terminal_dump_viewport(ghostty_vt_terminal_t terminal);
 ghostty_vt_bytes_t ghostty_vt_terminal_dump_viewport_row(ghostty_vt_terminal_t terminal,
                                                          uint16_t row);
+// NUL-terminated UTF-8 strings, one per physical cell; wide tails are empty.
+ghostty_vt_bytes_t ghostty_vt_terminal_dump_viewport_row_cells(ghostty_vt_terminal_t terminal,
+                                                            uint16_t row);
+ghostty_vt_bytes_t ghostty_vt_terminal_take_responses(ghostty_vt_terminal_t terminal);
 ghostty_vt_bytes_t ghostty_vt_terminal_dump_viewport_row_cell_styles(ghostty_vt_terminal_t terminal,
                                                                      uint16_t row);
 ghostty_vt_bytes_t ghostty_vt_terminal_dump_viewport_row_style_runs(ghostty_vt_terminal_t terminal,

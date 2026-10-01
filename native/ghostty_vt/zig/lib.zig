@@ -32,7 +32,7 @@ const TerminalHandle = struct {
         handle.* = .{
             .alloc = alloc,
             .terminal = t,
-            .handler = .{ .terminal = undefined },
+            .handler = .{ .terminal = undefined, .alloc = alloc, .default_fg = undefined, .default_bg = undefined },
             .stream = undefined,
             .default_fg = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF },
             .default_bg = .{ .r = 0x00, .g = 0x00, .b = 0x00 },
@@ -40,6 +40,8 @@ const TerminalHandle = struct {
             .has_viewport_top_y_screen = true,
         };
         handle.handler.terminal = &handle.terminal;
+        handle.handler.default_fg = &handle.default_fg;
+        handle.handler.default_bg = &handle.default_bg;
         // initAlloc wires up osc_parser.alloc (replaces v1.2.3 manual assignment)
         handle.stream = terminal.Stream(*Handler).initAlloc(alloc, &handle.handler);
         return handle;
@@ -54,9 +56,21 @@ const TerminalHandle = struct {
 
 const Handler = struct {
     terminal: *terminal.Terminal,
+    alloc: Allocator,
+    responses: std.ArrayList(u8) = .empty,
+    default_fg: *terminal.color.RGB,
+    default_bg: *terminal.color.RGB,
 
     // Required by Stream.deinit in v1.3.1+
-    pub fn deinit(_: *Handler) void {}
+    pub fn deinit(self: *Handler) void {
+        self.responses.deinit(self.alloc);
+    }
+
+    fn reply(self: *Handler, comptime fmt: []const u8, args: anytype) !void {
+        const bytes = try std.fmt.allocPrint(self.alloc, fmt, args);
+        defer self.alloc.free(bytes);
+        try self.responses.appendSlice(self.alloc, bytes);
+    }
 
     pub fn print(self: *Handler, c: u21) !void {
         try self.terminal.print(c);
@@ -104,13 +118,34 @@ const Handler = struct {
         terminator: terminal.osc.Terminator,
     ) !void {
         _ = op;
-        _ = terminator;
 
         if (requests.count() == 0) return;
 
         var it = requests.constIterator(0);
         while (it.next()) |req| {
             switch (req.*) {
+                .query => |target| {
+                    const rgb: terminal.color.RGB, const prefix: u16 = switch (target) {
+                        .palette => |i| .{ self.terminal.colors.palette.current[i], 4 },
+                        .dynamic => |d| switch (d) {
+                            .foreground => .{ self.default_fg.*, 10 },
+                            .background => .{ self.default_bg.*, 11 },
+                            else => continue,
+                        },
+                        else => continue,
+                    };
+                    if (target == .palette) {
+                        try self.reply("\x1b]4;{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}{s}", .{
+                            target.palette, @as(u16, rgb.r) * 257, @as(u16, rgb.g) * 257,
+                            @as(u16, rgb.b) * 257, terminator.string(),
+                        });
+                    } else {
+                        try self.reply("\x1b]{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}{s}", .{
+                            prefix, @as(u16, rgb.r) * 257, @as(u16, rgb.g) * 257,
+                            @as(u16, rgb.b) * 257, terminator.string(),
+                        });
+                    }
+                },
                 .set => |set| switch (set.target) {
                     .palette => |i| {
                         // DynamicPalette.set handles both the color update and the mask
@@ -290,7 +325,14 @@ const Handler = struct {
             .reset_mode => try self.setMode(value.mode, false),
             .save_mode => {},
             .restore_mode => {},
-            .request_mode => {},
+            .request_mode => {
+                const raw: u16 = @intFromEnum(value.mode);
+                try self.reply("\x1b[{s}{d};{d}$y", .{
+                    if (raw & 0x8000 == 0) "?" else "",
+                    raw & 0x7FFF,
+                    @as(u8, if (self.terminal.modes.get(value.mode)) 1 else 2),
+                });
+            },
             .request_mode_unknown => {},
             .protected_mode_off => {},
             .protected_mode_iso => {},
@@ -306,6 +348,14 @@ const Handler = struct {
                 &value.requests,
                 value.terminator,
             ),
+            .device_status => switch (value.request) {
+                .operating_status => try self.reply("\x1b[0n", .{}),
+                .cursor_position => try self.reply("\x1b[{d};{d}R", .{
+                    self.terminal.screens.active.cursor.y + 1,
+                    self.terminal.screens.active.cursor.x + 1,
+                }),
+                else => {},
+            },
 
             // --- reset ---
             .full_reset => self.terminal.fullReset(),
@@ -456,6 +506,46 @@ export fn ghostty_vt_terminal_dump_viewport_row(
     }) catch return .{ .ptr = null, .len = 0 };
 
     const slice = builder.toOwnedSlice() catch return .{ .ptr = null, .len = 0 };
+    return .{ .ptr = slice.ptr, .len = slice.len };
+}
+
+export fn ghostty_vt_terminal_dump_viewport_row_cells(
+    terminal_ptr: ?*anyopaque,
+    row: u16,
+) callconv(.c) ghostty_vt_bytes_t {
+    if (terminal_ptr == null) return .{ .ptr = null, .len = 0 };
+    const handle: *TerminalHandle = @ptrCast(@alignCast(terminal_ptr.?));
+    const pin = handle.terminal.screens.active.pages.pin(.{ .viewport = .{ .x = 0, .y = row } }) orelse
+        return .{ .ptr = null, .len = 0 };
+    const alloc = std.heap.c_allocator;
+    var builder: std.Io.Writer.Allocating = .init(alloc);
+    defer builder.deinit();
+    for (pin.cells(.all)) |*cell| {
+        if (cell.wide != .spacer_tail) {
+            if (cell.wide == .spacer_head or !cell.hasText()) {
+                builder.writer.writeByte(' ') catch return .{ .ptr = null, .len = 0 };
+            } else {
+                var bytes: [4]u8 = undefined;
+                const len = std.unicode.utf8Encode(cell.codepoint(), &bytes) catch return .{ .ptr = null, .len = 0 };
+                builder.writer.writeAll(bytes[0..len]) catch return .{ .ptr = null, .len = 0 };
+                if (cell.hasGrapheme()) {
+                    for (pin.grapheme(cell).?) |cp| {
+                        const size = std.unicode.utf8Encode(cp, &bytes) catch return .{ .ptr = null, .len = 0 };
+                        builder.writer.writeAll(bytes[0..size]) catch return .{ .ptr = null, .len = 0 };
+                    }
+                }
+            }
+        }
+        builder.writer.writeByte(0) catch return .{ .ptr = null, .len = 0 };
+    }
+    const slice = builder.toOwnedSlice() catch return .{ .ptr = null, .len = 0 };
+    return .{ .ptr = slice.ptr, .len = slice.len };
+}
+
+export fn ghostty_vt_terminal_take_responses(terminal_ptr: ?*anyopaque) callconv(.c) ghostty_vt_bytes_t {
+    if (terminal_ptr == null) return .{ .ptr = null, .len = 0 };
+    const handle: *TerminalHandle = @ptrCast(@alignCast(terminal_ptr.?));
+    const slice = handle.handler.responses.toOwnedSlice(handle.alloc) catch return .{ .ptr = null, .len = 0 };
     return .{ .ptr = slice.ptr, .len = slice.len };
 }
 

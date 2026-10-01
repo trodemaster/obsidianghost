@@ -4,6 +4,8 @@
   "description": "Claude Code sidebar terminal for Obsidian — libghostty-vt renderer + node-pty + OSC 8 vault links",
   "main": "main.js",
   "scripts": {
+    "test:images": "node scripts/test-terminal.mjs kitty-images",
+    "test:rendering": "node scripts/test-terminal.mjs rendering",
     "dev": "node esbuild.config.cjs",
     "build": "node esbuild.config.cjs --production",
     "build:native": "node scripts/build-ghostty-vt.mjs && node-gyp rebuild && cp build/Release/ghostty_vt.node native/ghostty_vt.node",

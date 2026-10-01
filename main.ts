@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { homedir } from "os";
 import { dirname, isAbsolute, join, normalize as normalizeFsPath, relative } from "path";
 import {
@@ -14,10 +14,13 @@ import {
   normalizePath,
 } from "obsidian";
 import type { IPty } from "node-pty";
+import { readFontMetrics, readFontNames, terminalMetrics, type FontMetrics } from "./font-metrics";
+import { KittyGraphics, IMAGE_PLACEHOLDER, decodeImageCell, terminalRowCells, type ImageCell } from "./kitty-graphics";
 import {
   StyleRunFlags,
   parseDirtyRows,
   parseStyleRuns,
+  textRangeToCells,
   tryLoadGhosttyNative,
   type GhosttyNative,
   type GhosttyNativeState,
@@ -85,6 +88,7 @@ class GhosttyTerminalView extends ItemView {
   private pty: IPty | null = null;
   private intentionallyKilled = false;
   private vt: GhosttyTerminal | null = null;
+  private graphics: KittyGraphics | null = null;
   private bodyEl: HTMLElement | null = null;
   private screenEl: HTMLElement | null = null;
   private canvasEl: HTMLCanvasElement | null = null;
@@ -111,6 +115,7 @@ class GhosttyTerminalView extends ItemView {
   private lastHoverCell: { col: number; row: number } | null = null;
   private lastHoverModifier = false;
   private fontLoadPromise: Promise<void> | null = null;
+  private fontMetrics: FontMetrics | null = null;
   private selectionAnchor: Cell | null = null;
   private selectionFocus: Cell | null = null;
   private isSelecting = false;
@@ -265,14 +270,22 @@ class GhosttyTerminalView extends ItemView {
         ...process.env,
         TERM_PROGRAM: "ghostty",
         TERM_PROGRAM_VERSION: "1.3.1",
+        COLORTERM: "truecolor",
       } as Record<string, string>,
     });
 
     this.intentionallyKilled = false;
+    this.graphics = new KittyGraphics(
+      () => this.scheduleRender(true),
+      (reply) => this.pty?.write(reply),
+    );
 
     this.pty.onData((data) => {
       if (!this.vt) return;
       this.vt.feed(data);
+      const responses = this.vt.takeResponses();
+      if (responses) this.pty?.write(responses);
+      this.graphics?.feed(data);
       this.parseOscTitleFromStream(data);
       this.scheduleRender();
     });
@@ -347,6 +360,8 @@ class GhosttyTerminalView extends ItemView {
   }
 
   private stopSession(): void {
+    this.graphics?.dispose();
+    this.graphics = null;
     if (this.bodyEl) {
       this.bodyEl.removeEventListener("mousedown", this.focusTerminal);
       this.bodyEl.removeEventListener("click", this.focusTerminal);
@@ -495,8 +510,7 @@ class GhosttyTerminalView extends ItemView {
   // startSession() calls measureSize() → getCharSize().
   private ensureFontLoaded(): Promise<void> {
     if (this.fontLoadPromise) return this.fontLoadPromise;
-    const { family, filePath, size } = this.plugin.terminalFont;
-    console.log(`[ghostty] terminalFont: family="${family}" size=${size} filePath="${filePath}"`);
+    const { family, filePath, faces } = this.plugin.terminalFont;
     if (!filePath) {
       console.warn("[ghostty] No font file found — Canvas will use system monospace fallback");
       this.fontLoadPromise = Promise.resolve();
@@ -507,13 +521,22 @@ class GhosttyTerminalView extends ItemView {
         // Read font bytes and encode as base64 data URI.
         // This avoids Electron CSP restrictions on file:// URLs in FontFace,
         // and works regardless of whether the font is in Electron's font cache.
-        const bytes = readFileSync(filePath);
-        const mime = filePath.toLowerCase().endsWith(".otf") ? "font/otf" : "font/ttf";
-        const dataUri = `url(data:${mime};base64,${bytes.toString("base64")})`;
-        const face = new FontFace(family, dataUri);
-        await face.load();
-        document.fonts.add(face);
-        console.log(`[ghostty] FontFace loaded: "${family}" from ${filePath} (${bytes.length} bytes)`);
+        try {
+          this.fontMetrics = readFontMetrics(readFileSync(filePath));
+        } catch (error) {
+          console.warn("[ghostty] Font metrics unavailable; using Canvas metrics:", error);
+        }
+        await Promise.all(faces.map(async ({ filePath: path, style, weight }) => {
+          if (!path) {
+            console.warn(`[ghostty] Missing ${style}/${weight} font face; using font synthesis`);
+            return;
+          }
+          const bytes = readFileSync(path);
+          const mime = path.toLowerCase().endsWith(".otf") ? "font/otf" : "font/ttf";
+          const face = new FontFace(family, `url(data:${mime};base64,${bytes.toString("base64")})`, { style, weight });
+          await face.load();
+          (document.fonts as FontFaceSet & { add(face: FontFace): FontFaceSet }).add(face);
+        }));
       } catch (e) {
         console.error("[ghostty] FontFace.load() failed:", e);
       }
@@ -532,22 +555,20 @@ class GhosttyTerminalView extends ItemView {
     }
 
     ctx.font = this.getCanvasFont(0);
-    console.log(`[ghostty] getCharSize font="${ctx.font}" dpr=${window.devicePixelRatio}`);
-
-    // Width: average 10 wide chars to reduce sub-pixel error
     const width = ctx.measureText("MMMMMMMMMM").width / 10;
+    const dpr = window.devicePixelRatio || 1;
+    if (this.fontMetrics) {
+      this.charSize = terminalMetrics(width, this.plugin.terminalFont.size, dpr, this.fontMetrics);
+      return this.charSize;
+    }
 
-    // Height: fontBoundingBox is the full typographic line box — ascender peak to
-    // descender trough — which is exactly what Ghostty uses for row pitch.
-    // No extra leading is added; Ghostty adds none either.
+    // Approximate the line box only when SFNT metrics are unavailable.
     const m = ctx.measureText("Mg|");
     const fbAscent = m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent * 1.2;
     const fbDescent = m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent * 1.5;
-    const height = Math.ceil(fbAscent + fbDescent);
-    const baseline = Math.round(fbAscent);
-
-    console.log(`[ghostty] charSize: width=${width.toFixed(2)} height=${height} baseline=${baseline} fbAscent=${fbAscent.toFixed(2)} fbDescent=${fbDescent.toFixed(2)}`);
-    this.charSize = { width, height, baseline };
+    const height = Math.round((fbAscent + fbDescent) * dpr) / dpr;
+    const baseline = Math.round(fbAscent * dpr) / dpr;
+    this.charSize = { width: Math.round(width * dpr) / dpr, height, baseline };
     return this.charSize;
   }
 
@@ -579,7 +600,12 @@ class GhosttyTerminalView extends ItemView {
     if (changed) {
       this.canvasEl.width = width;
       this.canvasEl.height = height;
+      const dprChanged = this.devicePixelRatio !== dpr;
       this.devicePixelRatio = dpr;
+      if (dprChanged) {
+        this.charSize = null;
+        this.updateSize(true);
+      }
     }
 
     this.canvasContext.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -601,7 +627,7 @@ class GhosttyTerminalView extends ItemView {
     const { width, height, baseline } = this.getCharSize();
     const rect = this.canvasEl.getBoundingClientRect();
     const y = row * height;
-    const cells = this.rowTextToCells(this.vt.dumpViewportRow(row), cols);
+    const cells = this.vt.dumpViewportRowCells(row);
     const runs = parseStyleRuns(this.vt.dumpViewportRowStyleRuns(row));
     const ctx = this.canvasContext;
 
@@ -609,10 +635,15 @@ class GhosttyTerminalView extends ItemView {
     ctx.fillRect(0, y, rect.width, height);
 
     if (runs.length === 0) {
-      this.drawTextRun(cells.join(""), 0, cols, y, baseline, 0, this.themeColors);
+      this.drawTextRun(cells, 0, cols, y, baseline, 0, this.themeColors);
+      this.drawImageCells(cells, row, []);
       return;
     }
 
+    for (const run of runs) {
+      ctx.fillStyle = this.colorToCss(run.bg);
+      ctx.fillRect((run.startCol - 1) * width, y, (run.endCol - run.startCol + 1) * width, height);
+    }
     for (const run of runs) {
       const start = Math.max(0, Math.min(cols, run.startCol === 0 ? run.startCol : run.startCol - 1));
       const end = Math.max(start, Math.min(cols, run.endCol));
@@ -625,7 +656,7 @@ class GhosttyTerminalView extends ItemView {
         bgCss: this.colorToCss(run.bg),
       };
       this.drawTextRun(
-        cells.slice(start, end).join(""),
+        cells.slice(start, end),
         start,
         end,
         y,
@@ -634,10 +665,25 @@ class GhosttyTerminalView extends ItemView {
         runTheme
       );
     }
+    this.drawImageCells(cells, row, runs);
+  }
+
+  private drawImageCells(cells: string[], row: number, runs: ReturnType<typeof parseStyleRuns>): void {
+    if (!this.canvasContext || !this.graphics) return;
+    const { width, height } = this.getCharSize();
+    let previous: ImageCell | undefined;
+    for (let col = 0; col < cells.length; col++) {
+      const run = runs.find((item) => col >= item.startCol - 1 && col < item.endCol);
+      const cell = decodeImageCell(cells[col], run?.fg ?? this.themeColors.fg, previous);
+      previous = cell ?? undefined;
+      if (cell && !(run && run.flags & StyleRunFlags.invisible)) {
+        this.graphics.drawCell(this.canvasContext, cell, col * width, row * height, width, height);
+      }
+    }
   }
 
   private drawTextRun(
-    text: string,
+    cells: string[],
     startCol: number,
     endCol: number,
     y: number,
@@ -651,9 +697,6 @@ class GhosttyTerminalView extends ItemView {
     const x = startCol * width;
     const runWidth = (endCol - startCol) * width;
 
-    ctx.fillStyle = theme.bgCss;
-    ctx.fillRect(x, y, runWidth, height);
-
     if (flags & StyleRunFlags.invisible) return;
 
     ctx.font = this.getCanvasFont(flags);
@@ -662,9 +705,20 @@ class GhosttyTerminalView extends ItemView {
     ctx.globalAlpha = flags & StyleRunFlags.faint ? 0.55 : 1;
     // Render each cell at its exact grid position so Canvas advance widths
     // cannot cause drift (space chars especially vary across fonts/renderers).
-    const chars = Array.from(text);
-    for (let i = 0; i < chars.length; i++) {
-      ctx.fillText(chars[i], x + i * width, y + baseline);
+    for (let i = 0; i < cells.length; i++) {
+      if (cells[i] && !cells[i].startsWith(IMAGE_PLACEHOLDER)) {
+        const wide = cells[i + 1] === "" ? 2 : 1;
+        const glyphX = x + i * width;
+        if (!this.drawBlockGlyph(cells[i], glyphX, y, width, height) &&
+            !this.drawBoxGlyph(cells[i], glyphX, y, width, height)) {
+          if (wide === 2) {
+            const advance = ctx.measureText(cells[i]).width;
+            ctx.fillText(cells[i], glyphX + Math.max(0, (2 * width - advance) / 2), y + baseline, 2 * width);
+          } else {
+            ctx.fillText(cells[i], glyphX, y + baseline);
+          }
+        }
+      }
     }
     ctx.globalAlpha = 1;
 
@@ -676,6 +730,73 @@ class GhosttyTerminalView extends ItemView {
     }
   }
 
+  private drawBlockGlyph(glyph: string, x: number, y: number, width: number, height: number): boolean {
+    const cp = glyph.codePointAt(0);
+    if (glyph.length !== 1 || cp === undefined || cp < 0x2580 || cp > 0x259f || !this.canvasContext) {
+      return false;
+    }
+    const ctx = this.canvasContext;
+    const dpr = this.devicePixelRatio;
+    const cellWidth = Math.round(width * dpr);
+    const cellHeight = Math.round(height * dpr);
+    if (cp >= 0x2596) {
+      const mask = [4, 8, 1, 13, 9, 7, 11, 2, 6, 14][cp - 0x2596];
+      const midX = Math.round(cellWidth / 2);
+      const midY = Math.round(cellHeight / 2);
+      ctx.beginPath();
+      for (let quadrant = 0; quadrant < 4; quadrant++) {
+        if (!(mask & (1 << quadrant))) continue;
+        const left = quadrant % 2 ? cellWidth - midX : 0;
+        const top = quadrant >= 2 ? cellHeight - midY : 0;
+        ctx.rect(x + left / dpr, y + top / dpr, midX / dpr, midY / dpr);
+      }
+      // Ghostty overlaps rounded halves on odd-sized cells; composite their union once.
+      ctx.fill();
+      return true;
+    }
+    let w = cellWidth;
+    let h = cellHeight;
+    let left = 0;
+    let top = 0;
+    if (cp === 0x2580 || cp === 0x2594) {
+      h = Math.round(cellHeight * (cp === 0x2580 ? 1 / 2 : 1 / 8));
+    } else if (cp >= 0x2581 && cp <= 0x2587) {
+      h = Math.round(cellHeight * (cp - 0x2580) / 8);
+      top = cellHeight - h;
+    } else if (cp >= 0x2589 && cp <= 0x258f) {
+      w = Math.round(cellWidth * (0x2590 - cp) / 8);
+    } else if (cp === 0x2590 || cp === 0x2595) {
+      w = Math.round(cellWidth * (cp === 0x2590 ? 1 / 2 : 1 / 8));
+      left = cellWidth - w;
+    }
+    const alpha = ctx.globalAlpha;
+    if (cp >= 0x2591 && cp <= 0x2593) ctx.globalAlpha = alpha * (cp - 0x2590) * 64 / 255;
+    ctx.fillRect(x + left / dpr, y + top / dpr, w / dpr, h / dpr);
+    ctx.globalAlpha = alpha;
+    return true;
+  }
+
+  private drawBoxGlyph(glyph: string, x: number, y: number, width: number, height: number): boolean {
+    const index = "─│┌┐└┘├┤┬┴┼━┃┏┓┗┛┣┫┳┻╋".indexOf(glyph);
+    if (index < 0 || glyph.length !== 1 || !this.canvasContext) return false;
+    const directions = ["lr", "ud", "rd", "ld", "ru", "lu", "urd", "uld", "lrd", "lru", "lrud"][index % 11];
+    const dpr = this.devicePixelRatio;
+    const font = this.fontMetrics;
+    const unitThickness = font && font.underlineThickness > 0
+      ? font.underlineThickness / font.unitsPerEm : 0.05;
+    const lightPixels = Math.max(1, Math.ceil(unitThickness * this.plugin.terminalFont.size * dpr));
+    const pixels = lightPixels * (index < 11 ? 1 : 2);
+    const thickness = pixels / dpr;
+    const cx = x + Math.max(0, Math.floor((width * dpr - pixels) / 2)) / dpr;
+    const cy = y + Math.max(0, Math.floor((height * dpr - pixels) / 2)) / dpr;
+    const ctx = this.canvasContext;
+    if (directions.includes("l")) ctx.fillRect(x, cy, cx - x + thickness, thickness);
+    if (directions.includes("r")) ctx.fillRect(cx, cy, x + width - cx, thickness);
+    if (directions.includes("u")) ctx.fillRect(cx, y, thickness, cy - y + thickness);
+    if (directions.includes("d")) ctx.fillRect(cx, cy, thickness, y + height - cy);
+    return true;
+  }
+
   private drawTextDecoration(
     x: number,
     y: number,
@@ -685,10 +806,11 @@ class GhosttyTerminalView extends ItemView {
     if (!this.canvasContext) return;
     const ctx = this.canvasContext;
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
+    const dpr = this.devicePixelRatio;
+    ctx.lineWidth = 1 / dpr;
     ctx.beginPath();
-    ctx.moveTo(x, Math.round(y) + 0.5);
-    ctx.lineTo(x + width, Math.round(y) + 0.5);
+    ctx.moveTo(x, (Math.round(y * dpr) + 0.5) / dpr);
+    ctx.lineTo(x + width, (Math.round(y * dpr) + 0.5) / dpr);
     ctx.stroke();
   }
 
@@ -748,8 +870,9 @@ class GhosttyTerminalView extends ItemView {
 
     const lines: string[] = [];
     for (let row = startRow; row <= endRow; row++) {
-      const cells = this.rowTextToCells(this.vt.dumpViewportRow(row - 1), cols);
-      const from = row === startRow ? startCol - 1 : 0;
+      const cells = this.vt.dumpViewportRowCells(row - 1);
+      let from = row === startRow ? startCol - 1 : 0;
+      if (cells[from] === "" && from > 0) from--;
       const to = row === endRow ? endCol : cols;
       lines.push(cells.slice(from, to).join("").replace(/\s+$/, ""));
     }
@@ -786,12 +909,7 @@ class GhosttyTerminalView extends ItemView {
   }
 
   private rowTextToCells(rowText: string, cols: number): string[] {
-    const line = rowText.replace(/\r?\n$/, "");
-    const cells = Array.from(line);
-    while (cells.length < cols) {
-      cells.push(" ");
-    }
-    return cells.slice(0, cols);
+    return terminalRowCells(rowText, cols);
   }
 
   private allViewportRows(): number[] {
@@ -1107,8 +1225,8 @@ class GhosttyTerminalView extends ItemView {
   // wrapping in an OSC 8 hyperlink.
   private findPlainUrlLinkAt(col: number, row: number): HoveredLink | null {
     if (!this.vt) return null;
-    const { cols } = this.viewportSize;
-    const rowText = this.rowTextToCells(this.vt.dumpViewportRow(row - 1), cols).join("");
+    const cells = this.vt.dumpViewportRowCells(row - 1);
+    const rowText = cells.join("");
 
     PLAIN_URL_REGEX.lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -1117,8 +1235,9 @@ class GhosttyTerminalView extends ItemView {
       if (!trimmed) continue;
       const startIdx = match.index;
       const endIdx = startIdx + trimmed.length;
-      if (col - 1 >= startIdx && col - 1 < endIdx) {
-        return { uri: trimmed, row, startCol: startIdx + 1, endCol: endIdx + 1 };
+      const range = textRangeToCells(cells, startIdx, endIdx);
+      if (range && col >= range.startCol && col < range.endCol) {
+        return { uri: trimmed, row, ...range };
       }
     }
     return null;
@@ -1595,6 +1714,7 @@ type TerminalFont = {
   family: string;   // CSS family name used with Canvas — always "GhosttyTerminalFont" when loaded from file
   size: number;     // px, from Ghostty font-size
   filePath: string; // absolute path to the TTF/OTF file, or "" if not found
+  faces: { filePath: string; style: "normal" | "italic"; weight: "400" | "700" }[];
 };
 
 type GhosttyColorConfig = {
@@ -1706,9 +1826,9 @@ function parseGhosttyColorConfig(): GhosttyColorConfig {
   return { ...EMPTY_COLOR_CONFIG, palette: new Map() };
 }
 
-// Search standard macOS font directories for a font by its PostScript/filename stem.
+// Resolve installed TTF/OTF families and retain legacy filename-stem support.
 // Does not require fc-list (which MacPorts installs outside Electron's PATH).
-function findFontFile(postscriptName: string): string {
+function findFontFile(name: string, style = "Regular"): string {
   const dirs = [
     "/Library/Fonts",
     join(homedir(), "Library", "Fonts"),
@@ -1719,8 +1839,26 @@ function findFontFile(postscriptName: string): string {
   ];
   for (const dir of dirs) {
     for (const ext of [".ttf", ".otf", ".TTF", ".OTF"]) {
-      const candidate = join(dir, `${postscriptName}${ext}`);
+      const stem = name.replace(/-Regular$/, `-${style}`);
+      const candidate = join(dir, `${stem}${ext}`);
       if (existsSync(candidate)) return candidate;
+    }
+  }
+  const normalizeStyle = (value: string) => value.toLowerCase().replace(/\s+/g, "");
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    for (const file of readdirSync(dir)) {
+      if (!/\.(ttf|otf)$/i.test(file)) continue;
+      const candidate = join(dir, file);
+      try {
+        const font = readFontNames(readFileSync(candidate));
+        if (font.names.some((value) => value.toLowerCase() === name.toLowerCase()) &&
+            font.styles.some((value) => normalizeStyle(value) === normalizeStyle(style))) {
+          return candidate;
+        }
+      } catch (error) {
+        console.warn(`[ghostty] Cannot inspect font ${candidate}`, error);
+      }
     }
   }
   return "";
@@ -1737,6 +1875,7 @@ function parseGhosttyConfig(): TerminalFont {
       const text = readFileSync(p, "utf8");
       let rawFamily = "";
       let size = 0;
+      const styles = new Map<string, string>();
       for (const line of text.split("\n")) {
         const trimmed = line.trim();
         if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
@@ -1745,20 +1884,34 @@ function parseGhosttyConfig(): TerminalFont {
         const val = trimmed.slice(eq + 1).trim();
         if (key === "font-family") rawFamily = val;
         else if (key === "font-size") size = parseFloat(val) || 0;
+        else if (key.startsWith("font-family-")) styles.set(key, val);
       }
       if (rawFamily || size > 0) {
         const filePath = rawFamily ? findFontFile(rawFamily) : "";
+        if (rawFamily && !filePath) console.warn(`[ghostty] Font family "${rawFamily}" not found; using monospace`);
         return {
           family: filePath ? GHOSTTY_FONT_FAMILY : "monospace",
           filePath,
           size: size > 0 ? size : 13,
+          faces: ([
+            ["normal", "400", "", "Regular"],
+            ["normal", "700", "font-family-bold", "Bold"],
+            ["italic", "400", "font-family-italic", "Italic"],
+            ["italic", "700", "font-family-bold-italic", "BoldItalic"],
+          ] as const).map(([style, weight, key, suffix]) => ({
+            style,
+            weight,
+            filePath: key
+              ? findFontFile(styles.get(key) ?? rawFamily, suffix)
+              : filePath,
+          })),
         };
       }
-    } catch {
-      // ignore unreadable config
+    } catch (error) {
+      console.warn(`[ghostty] Cannot read font configuration ${p}`, error);
     }
   }
-  return { family: "monospace", size: 13, filePath: "" };
+  return { family: "monospace", size: 13, filePath: "", faces: [] };
 }
 
 interface GhosttyPluginSettings {

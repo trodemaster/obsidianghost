@@ -1,6 +1,90 @@
 # Handoff - obsidianghost
 
-As of 2026-08-06.
+## Update - 2026-10-01: smooth progress bars
+
+The Copilot usage track is `░` (U+2591). Ghostty paints it as a uniformly shaded
+cell, while the Canvas font glyph was stippled. Added procedural coverage for all
+32 Unicode block elements, including Ghostty's shade values, fractional blocks,
+and quadrants. Physical-pixel rounding prevents seams, and shade alpha multiplies
+the current faint/style alpha without changing subsequent text. This is JS-only
+and can be applied live without restarting embedded or native Ghostty terminals.
+Installed centrally and activated in the existing daneel view without changing
+its PTY PID. The live usage track is now uniformly shaded rather than dotted.
+The rendering probe checks every block element at integer/fractional DPRs, odd
+cell dimensions, and normal/faint alpha, plus the full native-to-canvas bar path.
+
+## Update - 2026-10-01: text-rendering follow-ups
+
+The five image-task typography follow-ups below are implemented. Native viewport
+cells now preserve wide tails and entire graphemes, including selection and URL
+mapping. Mode 2027 is negotiated, not enabled globally. The native shim answers
+color, cursor/status, and mode queries; shells explicitly advertise true color.
+Real regular/bold/italic/bold-italic faces load independently, backgrounds precede
+text, and font-table metrics and box drawing are rounded to device pixels.
+
+The original Ghostty configuration used a filename as a family and fell back to
+another font (22 x 48 physical-pixel cells). Blake approved standardizing both on
+`SauceCodePro Nerd Font Mono` at size 18. Corrected the local Ghostty configuration,
+installed the three missing style faces plus license, and added font-family metadata
+resolution. Ghostty's CSI 16t measurement and the live Obsidian renderer now both
+report 22 x 45 physical-pixel cells at DPR 2; the Obsidian baseline is 35 physical
+pixels. Canvas rasterization can still differ from native Ghostty.
+
+`npm run test:rendering` covers family/style resolution, cell/grapheme layout,
+mode/query replies, true-color shell environment, selection/links, background
+pixels, and gap-free box lines. `GHOSTTY_METRICS_FILE=...` adds comparison against
+the real Ghostty fixture measurement. `npm run test:images` still covers the full
+PTY/native/canvas image path.
+
+This upgrade requires a native rebuild and runtime sync, not just `make reinstall`.
+The build uses an ignored local 15.4 SDK or `MACOS_SDK_PATH`, temporary SDK shims,
+Apple archive repacking, and a macOS 11 deployment target. Old addons are rejected
+with an actionable message. Native upgrades normally require an app restart
+because Node may retain the previous addon across plugin reloads.
+
+Installed the JS and native addon centrally and activated them in daneel with
+Blake's approval. Used a unique-path native load/cache replacement before the
+plugin reload, then restored its terminal; no whole-app restart was necessary.
+The final box-stroke adjustment was applied live without another terminal restart.
+Existing native Ghostty terminals must not be reset/reloaded/closed for this work;
+the corrected Ghostty family setting is persistent for later user-controlled use.
+
+## Update - 2026-10-01: image support first
+
+Added `kitty-graphics.ts` for the direct PNG / Unicode virtual placement path used
+by Copilot CLI. The native build has Kitty graphics disabled (`oniguruma=false`);
+its handler drops APC actions. The JS observer therefore decodes image commands
+alongside native VT parsing, while the canvas uses the native viewport's placeholder
+cells and foreground image IDs to paint images. No native rebuild is needed.
+
+Combining marks now stay attached to their base cell, fixing image row/column
+diacritics drifting into subsequent text cells. Images repaint on asynchronous
+decode, follow viewport text, and support chunking, deletion, and placement resizing.
+The renderer is deliberately not a complete Kitty graphics implementation; see
+README for limits. `scripts/tests/kitty-images.js` exercises browser pixels and
+PTY -> native VT -> canvas without reloading existing agent sessions.
+
+Installed the updated bundle centrally and enabled rendering in the running terminal
+without restarting its agent. Replayed the original `/tmp/ob4.png` into the existing
+placeholder's image cache (the old parser had already discarded its transmission);
+the window screenshot now shows the image instead of placeholder glyphs. Run
+`npm run test:images` for the isolated live regression probe.
+
+Text-rendering follow-ups from the Obsidian/Ghostty screenshot comparison:
+
+- [x] Match font size/density: Obsidian looks substantially smaller and tighter;
+  compare actual configured font, CSS px vs macOS points, DPR, and cell metrics
+  at comparable pane widths rather than assuming the old "matches Ghostty" claim.
+- [x] Load real bold and italic font faces, and compare emphasis with Ghostty
+  instead of relying only on browser-synthesized styles.
+- [x] Check ANSI backgrounds and muted/bright colors: Ghostty clearly distinguishes
+  inline code and input panels; verify received SGR and style-run colors.
+- [x] Preserve wide-character and grapheme-cluster cell widths (emoji, ZWJ, CJK),
+  including selection and link hit testing. Combining marks alone are now handled.
+- [x] Compare baseline, line spacing, glyph sharpness, and box-drawing alignment
+  at Retina DPR; make a side-by-side fixture for typography regression checks.
+
+The remaining sections are historical notes as of 2026-08-06; old cell/font APIs and claimed typography parity are superseded by the updates above.
 
 ## Repository State
 
@@ -106,9 +190,8 @@ npx tsc --noEmit
 Notes:
 
 - `make native` downloads Zig 0.15.2 (aarch64-macos) into `vendor/zig/0.15.2/` automatically if not present.
-- `make native` injects a `.zig-shim/xcrun` wrapper so Zig 0.15's SDK probe gets `MacOSX15.4.sdk` instead of the macOS 26.5 SDK name it doesn't recognize.
-- `npm run build:native:electron` also works (same xcrun shim injected via `scripts/build-ghostty-vt.mjs`).
-- After copying a new `.node` file into Obsidian, restart Obsidian or disable/enable the plugin so Electron unloads the old native module.
+- `make native` and `npm run build:native:electron` use the same temporary SDK shim in `scripts/build-ghostty-vt.mjs`. Set `MACOS_SDK_PATH` or install `vendor/sdk/MacOSX15.4.sdk`.
+- After copying a new `.node` file into Obsidian, restart Obsidian; plugin reload can retain the previous native module.
 - To reload only JS/CSS without restarting Obsidian: open the command palette (`Cmd+P`) and run **"Reload app without saving"**.
 
 ## Live Testing Loop

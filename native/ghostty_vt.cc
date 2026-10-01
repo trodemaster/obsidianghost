@@ -8,7 +8,7 @@
 namespace {
 
 Napi::String Version(const Napi::CallbackInfo &info) {
-  return Napi::String::New(info.Env(), "ghostty-vt/v1.2.3");
+  return Napi::String::New(info.Env(), "ghostty-vt/v1.3.1-cells");
 }
 
 Napi::String RenderDemo(const Napi::CallbackInfo &info) {
@@ -51,6 +51,8 @@ public:
             InstanceMethod("scrollViewport", &GhosttyTerminal::ScrollViewport),
             InstanceMethod("dumpViewport", &GhosttyTerminal::DumpViewport),
             InstanceMethod("dumpViewportRow", &GhosttyTerminal::DumpViewportRow),
+            InstanceMethod("dumpViewportRowCells", &GhosttyTerminal::DumpViewportRowCells),
+            InstanceMethod("takeResponses", &GhosttyTerminal::TakeResponses),
             InstanceMethod("cursorPosition", &GhosttyTerminal::CursorPosition),
             InstanceMethod("dumpViewportRowStyleRuns", &GhosttyTerminal::DumpViewportRowStyleRuns),
             InstanceMethod("takeDirtyViewportRows", &GhosttyTerminal::TakeDirtyViewportRows),
@@ -203,6 +205,45 @@ private:
     result.Set("valid", Napi::Boolean::New(env, ok));
     result.Set("col", Napi::Number::New(env, col));
     result.Set("row", Napi::Number::New(env, row));
+    return result;
+  }
+
+  Napi::Value DumpViewportRowCells(const Napi::CallbackInfo &info) {
+    Napi::Env env = info.Env();
+    if (!terminal_ || info.Length() < 1 || !info[0].IsNumber()) {
+      Napi::Error::New(env, "Expected a row on an active terminal").ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    const uint16_t row = static_cast<uint16_t>(info[0].As<Napi::Number>().Uint32Value());
+    const auto bytes = ghostty_vt_terminal_dump_viewport_row_cells(terminal_, row);
+    if (!bytes.ptr) {
+      Napi::Error::New(env, "Could not read terminal cells").ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+    auto cells = Napi::Array::New(env);
+    size_t offset = 0;
+    uint32_t col = 0;
+    while (offset < bytes.len) {
+      const auto end = static_cast<const uint8_t *>(std::memchr(bytes.ptr + offset, 0, bytes.len - offset));
+      if (!end) {
+        ghostty_vt_bytes_free(bytes);
+        Napi::Error::New(env, "Invalid terminal cell buffer").ThrowAsJavaScriptException();
+        return env.Undefined();
+      }
+      const size_t length = end - (bytes.ptr + offset);
+      cells.Set(col++, Napi::String::New(env, reinterpret_cast<const char *>(bytes.ptr + offset), length));
+      offset += length + 1;
+    }
+    ghostty_vt_bytes_free(bytes);
+    return cells;
+  }
+
+  Napi::Value TakeResponses(const Napi::CallbackInfo &info) {
+    const auto bytes = ghostty_vt_terminal_take_responses(terminal_);
+    const auto result = bytes.len
+      ? Napi::String::New(info.Env(), reinterpret_cast<const char *>(bytes.ptr), bytes.len)
+      : Napi::String::New(info.Env(), "");
+    ghostty_vt_bytes_free(bytes);
     return result;
   }
 

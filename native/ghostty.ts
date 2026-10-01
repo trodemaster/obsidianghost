@@ -13,6 +13,9 @@ export type GhosttyTerminal = {
   scrollViewport(deltaLines: number): number;
   dumpViewport(): string;
   dumpViewportRow(row: number): string;
+  // One string per physical cell; wide-character continuation cells are "".
+  dumpViewportRowCells(row: number): string[];
+  takeResponses(): string;
   cursorPosition(): { col: number; row: number; valid: boolean };
   // Phase 2: rich rendering APIs
   dumpViewportRowStyleRuns(row: number): Buffer;
@@ -68,6 +71,20 @@ export function parseDirtyRows(buf: Buffer): number[] {
   return rows;
 }
 
+export function textRangeToCells(cells: string[], start: number, end: number): { startCol: number; endCol: number } | null {
+  let offset = 0;
+  let startCol = -1;
+  for (let col = 0; col < cells.length; col++) {
+    const next = offset + cells[col].length;
+    if (startCol < 0 && start >= offset && start < next) startCol = col + 1;
+    if (startCol >= 0 && end <= next) {
+      return { startCol, endCol: col + (cells[col + 1] === "" ? 2 : 1) + 1 };
+    }
+    offset = next;
+  }
+  return null;
+}
+
 export type GhosttyNativeState = {
   native: GhosttyNative | null;
   message: string;
@@ -96,6 +113,14 @@ export function tryLoadGhosttyNative(
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports -- Native .node addon needs runtime require() for dynamic path resolution in Electron
     const native = require(modulePath) as GhosttyNative;
+    const probe = native.createTerminal(1, 1);
+    try {
+      if (typeof probe.dumpViewportRowCells !== "function" || typeof probe.takeResponses !== "function") {
+        throw new Error("Outdated native addon. Rebuild with make native, sync with make reinstall-runtime, and restart Obsidian.");
+      }
+    } finally {
+      probe.free();
+    }
     return {
       native,
       message: `Native module loaded: ${native.version()}`,
