@@ -46,7 +46,6 @@ Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghost
 
 - Two terminals in the same vault, each running `claude --continue`, race over the same session file and render blank. Use "New shell (no Agent)" for the second tab.
 - Scroll uses a full repaint instead of shifting canvas pixels.
-- Remove leftover debug `console.log` in `ensureFontLoaded()` / `getCharSize()`.
 - Add font-family and font-size settings so the Ghostty config doesn't need editing.
 - Right-click "Open agent here" in the file tree.
 - Consider replacing `native/ghostty_vt/zig/lib.zig` with upstream's libghostty-vt C API.

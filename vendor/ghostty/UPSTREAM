@@ -2,3 +2,6 @@ repo: https://github.com/ghostty-org/ghostty
 commit: befcdfd2c3a1cb24d9ec886e93c95b2b5daa7028
 date: 2026-10-03
 zig: 0.16.0 (minimum)
+trimmed: src/ keeps only files the libghostty-vt build reads (about 555 of 1013 upstream files).
+re-vendor: copy upstream src/, build with a clean cache, list files read via the Zig cache
+  manifests (.zig-cache/h/*.txt), and delete src files not listed.
