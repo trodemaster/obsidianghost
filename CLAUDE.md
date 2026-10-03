@@ -26,7 +26,7 @@ make setup-vaults
 - **Zig**: MacPorts `zig-0.16` (0.16.0). No download and no custom SDK. The old workaround (Zig 0.15.2 + `MacOSX15.4.sdk` + `xcrun` shim + archive repack) is gone: 0.15.2 could not link against the macOS 26/27 SDKs, and 0.16 does.
 - **Ghostty**: `vendor/ghostty` is a snapshot of upstream `main`, pinned in `vendor/ghostty/UPSTREAM`, trimmed to the files the build reads. The latest release (v1.3.1) is the last on Zig 0.15.2; `main` requires Zig ≥ 0.16.0. `vendor/uucode` is pinned to the commit Ghostty `main` uses.
 - **Electron**: read from the installed Obsidian at build time (`ELECTRON_VERSION` overrides it). Both native addons are N-API, so they are ABI-stable across Electron majors; still smoke-test after an Obsidian update.
-- **npm**: a `sudo npm` or `sudo port install` can leave root-owned files in `~/.npm`. If `npm install` complains about this, run `sudo chown -R 501:20 ~/.npm`, or set `npm_config_cache` to a repo-local directory.
+- **npm**: MacPorts installs and `sudo npm` leave `~/.npm` root-owned. Never chown it. The Makefile points npm at a repo-local cache (`.cache/npm`), so `~/.npm` is never touched by the build.
 - Make targets: `make help` lists them. `make reinstall` is the fast JS loop. `make install` also rebuilds the native addons.
 
 ## Install layout

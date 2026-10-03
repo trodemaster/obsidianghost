@@ -48,7 +48,7 @@ After syncing JS, reload with `Cmd+P` → "Reload app without saving". After syn
 ### Troubleshooting
 
 - **`make doctor` reports MISSING**: run the `port install` command it prints.
-- **`npm install` says the cache has root-owned files**: `sudo chown -R 501:20 ~/.npm`.
+- **npm cache permission errors**: the Makefile uses a repo-local npm cache (`.cache/npm`) and doesn't touch `~/.npm`. If you run `npm` by hand, set `npm_config_cache` the same way.
 - **Plugin missing in Obsidian**: confirm the vault symlink exists, then restart Obsidian.
 - **Native module load or version errors**: run `make install` and restart Obsidian.
 

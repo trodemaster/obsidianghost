@@ -21,6 +21,9 @@ ELECTRON_VERSION ?= $(shell plutil -extract CFBundleVersion raw \
 NODE_GYP = npx node-gyp rebuild --runtime=electron --target=$(ELECTRON_VERSION) \
   --arch=arm64 --dist-url=https://electronjs.org/headers --devdir=$(CURDIR)/.cache/node-gyp
 
+# Keep npm's cache in the repo: ~/.npm is root-owned on MacPorts machines (sudo npm / port).
+export npm_config_cache := $(CURDIR)/.cache/npm
+
 # npm install --ignore-scripts skips node-pty's own node-gyp run (wrong runtime);
 # `make pty` rebuilds it for Electron.
 STAMP := node_modules/.install-stamp
