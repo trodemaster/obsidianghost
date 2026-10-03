@@ -1,5 +1,5 @@
 // Regression probe: OSC 8 hyperlinks (already supported) now also require Cmd/Ctrl to
-// open, matching the plain-URL behavior added alongside this. See HANDOFF.md.
+// open, matching the plain-URL behavior added alongside this. See CLAUDE.md.
 //
 // Builds the OSC 8 sequence via printf's own \033 octal-escape parsing (interpreted when
 // the command *runs*, i.e. after Enter) rather than embedding raw ESC bytes in the typed

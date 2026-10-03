@@ -1,11 +1,11 @@
 .{
     .name = .ghostty_vt_zig,
     .version = "0.1.0",
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .paths = .{""},
     .fingerprint = 0x19fa48fcc7e0b592,
     .dependencies = .{
-        // Vendored locally so we can patch build.zig for Zig 0.16 compatibility.
+        // Vendored copy of upstream uucode (see vendor/uucode/UPSTREAM).
         .uucode = .{
             .path = "../../../vendor/uucode",
         },

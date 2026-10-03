@@ -1,324 +1,80 @@
-# Obsidian Plugin for libghostty — Development Spec
-
-## Links
-
-- [ghostty-org/ghostty](https://github.com/ghostty-org/ghostty) — Ghostty terminal emulator source
-- [Build a plugin – Obsidian Docs](https://docs.obsidian.md/Plugins/Getting+started/Build+a+plugin) — official plugin dev guide
-- [awesome-libghostty](https://github.com/Uzaaft/awesome-libghostty) — curated index of libghostty projects (501 stars)
-- [ghostling](https://github.com/ghostty-org/ghostling) — official reference terminal emulator built on libghostty-vt
-- [Libghostty Is Coming – Mitchell Hashimoto](https://mitchellh.com/writing/libghostty-is-coming) — architectural vision and roadmap
-- [ComputelessComputer/obsidian-ghostty](https://github.com/ComputelessComputer/obsidian-ghostty) — reference implementation (community-listed, early scaffold)
-- [obsidianmd/obsidian-releases PR #10046](https://github.com/obsidianmd/obsidian-releases/pull/10046) — community plugin registry merge
-- [derek-larson14/obsidian-claude-sidebar](https://github.com/derek-larson14/obsidian-claude-sidebar) — direct inspiration: what we're building a better version of
+# obsidianghost — Design and Architecture
 
 ## Goal
 
-Build a better **obsidian-claude-sidebar** — a sidebar terminal for Claude Code embedded in Obsidian — replacing its xterm.js + Python PTY bridge with libghostty-vt (native N-API) + node-pty. The result should render Claude Code sessions with full richness: 24-bit color, bold/italic, scrollback, and clickable OSC 8 hyperlinks for file paths that open directly in the Obsidian vault.
+A sidebar terminal for agent CLIs (Claude Code, Copilot CLI, or any shell command) embedded in Obsidian. It renders with libghostty-vt (native N-API) and node-pty, so sessions keep full fidelity: 24-bit color, styles, scrollback, Kitty inline images, and clickable OSC 8 / plain-text links that open vault files.
 
-### What obsidian-claude-sidebar does (the baseline)
+Inspired by [derek-larson14/obsidian-claude-sidebar](https://github.com/derek-larson14/obsidian-claude-sidebar), replacing its xterm.js + Python PTY bridge. The terminal-engine approach follows [ComputelessComputer/obsidian-ghostty](https://github.com/ComputelessComputer/obsidian-ghostty).
 
-- Embeds a full PTY terminal (xterm.js) in Obsidian's sidebar
-- Spawns Claude Code (or other CLIs) via a Python PTY bridge (`terminal_pty.py`)
-- Supports multiple tabs, right-click context menu to open Claude in a folder/file path
-- Base64-embeds Python scripts inside `main.js` and writes them to disk at runtime
+## Tech stack
 
-### Its limitations (what we're fixing)
-
-| Limitation | Our fix |
+| Component | Tool |
 |---|---|
-| Requires Python 3 installed | node-pty — no Python dependency |
-| xterm.js renders ANSI but doesn't understand it | libghostty-vt parses VT correctly, exposes typed cell data |
-| No clickable file paths | OSC 8 hyperlink hit-testing → open in Obsidian vault |
-| Claude output is raw terminal, no Obsidian integration | Vault-aware link handler; paths open as Obsidian notes |
-| Session lost on Obsidian restart | PTY session persistence via `claude --continue` |
-| Stale Python process management | node-pty handles process lifecycle cleanly |
+| Terminal engine | libghostty-vt, from vendored Ghostty sources (`vendor/ghostty`, pinned in `vendor/ghostty/UPSTREAM`) |
+| Native build | Zig 0.16 (MacPorts `zig-0.16`) → `libghostty_vt.a`, linked by node-gyp into `ghostty_vt.node` |
+| N-API wrapper | C++ with node-addon-api (`native/ghostty_vt.cc`) |
+| PTY | node-pty (N-API), rebuilt for the installed Obsidian's Electron |
+| Plugin | TypeScript bundled by esbuild into `main.js` |
+| Platform | macOS on Apple Silicon only (`isDesktopOnly: true`) |
 
----
-
-## Prior Art
-
-| | ComputelessComputer | obsidian-claude-sidebar | lavs9 |
-|---|---|---|---|
-| Terminal engine | libghostty-vt (N-API) | xterm.js | libghostty-vt (WASM) |
-| PTY | node-pty (native) | Python bridge | Python bridge |
-| Renderer | plain text dump (incomplete) | xterm.js (full) | WASM + Python |
-| Clickable links | No | No | No |
-| Claude Code focus | No | Yes | No |
-| Community listed | Yes | Yes | No |
-| Electron target | 37.6.0 (stale) | unknown | N/A |
-
-We are combining ComputelessComputer's terminal engine with obsidian-claude-sidebar's Claude Code UX focus, and adding the renderer and link handling that neither has.
-
----
-
-## Tech Stack
-
-| Component | Tool | Notes |
-|---|---|---|
-| Package manager | **npm** | Standard; reference repo uses bun but npm works fine |
-| Native lib build | **Zig** (latest stable) | Builds libghostty-vt static lib |
-| libghostty | **latest Ghostty release** | Vendored or via MacPorts port |
-| N-API addon | **node-gyp** + node-addon-api | C++ wrapper over libghostty-vt C API |
-| Electron target | **39.x** (Obsidian 1.11) | Reference repo hardcoded 37.6.0 — must update |
-| PTY | **node-pty** | Rebuilt against Electron 39 headers; replaces Python bridge |
-| Bundler | **esbuild** | Bundles TS → main.js |
-| Language | **TypeScript** | Plugin + renderer |
-| Obsidian API | **latest** (1.11) | Reference repo pinned to 1.5.7 — must update |
-| Platform | **macOS only** | `isDesktopOnly: true`; libghostty-vt macOS/Linux, node-pty no Windows PTY |
-
-### MacPorts Dependencies
-
-Only one MacPorts dependency: **`zig`** — already available at 0.16.0.
-
-```
-sudo port install zig
-```
-
-libghostty-vt is built from vendored Ghostty source as part of `npm run build:native` — no system-wide install needed. The static `libghostty_vt.a` is linked directly into `ghostty_vt.node` and never installed separately.
-
----
+The Electron version is read from the installed Obsidian at build time (`ELECTRON_VERSION`), not hard-coded.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│               Obsidian (Electron 39)             │
-│  ┌────────────────────────────────────────────┐  │
-│  │           ClaudeTerminalView               │  │
-│  │            (ItemView, TypeScript)          │  │
-│  │                                            │  │
-│  │  ┌─────────────┐   ┌────────────────────┐  │  │
-│  │  │   Canvas    │   │  Hyperlink         │  │  │
-│  │  │   Renderer  │   │  Hit-tester        │  │  │
-│  │  │   (TS)      │   │  → open in vault   │  │  │
-│  │  └──────┬──────┘   └────────┬───────────┘  │  │
-│  │         │                   │              │  │
-│  │  ┌──────▼───────────────────▼───────────┐  │  │
-│  │  │       ghostty_vt.node (N-API)        │  │  │
-│  │  │       C++ wrapper → libghostty_vt.a  │  │  │
-│  │  └──────────────────────────────────────┘  │  │
-│  │                                            │  │
-│  │  ┌──────────────────────────────────────┐  │  │
-│  │  │  node-pty → claude / shell PTY       │  │  │
-│  │  └──────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│                Obsidian (Electron)               │
+│  GhosttyTerminalView (ItemView, TypeScript)      │
+│   ├─ Canvas renderer  (main.ts, font-metrics.ts) │
+│   ├─ Kitty image layer (kitty-graphics.ts)       │
+│   ├─ Link hit-testing → open in vault            │
+│   ├─ ghostty_vt.node (N-API) → libghostty_vt.a   │
+│   └─ node-pty → shell → agent command            │
+└──────────────────────────────────────────────────┘
 ```
 
----
+## Native layer
 
-## libghostty-vt API Surface
+- `native/ghostty_vt/zig/lib.zig` is our wrapper around Ghostty's terminal library. It exports a small C ABI (see `native/ghostty_vt/include/ghostty_vt.h`): terminal lifecycle, `feed`, `resize`, scrollback control, cursor, per-row text/cell/style-run dumps, dirty-row and scroll-delta tracking, hyperlink lookup, default colors, and queued terminal replies.
+- `native/ghostty_vt/zig/build.zig` builds only the terminal library: it generates the Unicode tables with uucode, wires `terminal_options`, and emits a static archive for macOS 11+.
+- `vendor/ghostty/src` and `vendor/uucode` are source snapshots. Re-vendor by copying from upstream and updating the `UPSTREAM` file in each directory. Building needs Zig ≥ the `minimum_zig_version` in Ghostty's `build.zig.zon` (0.16.0 at the pinned commit).
+- Upstream now ships libghostty-vt as a first-class C library (`vendor/ghostty/src/lib_vt.zig`, `terminal/c/`). Replacing `lib.zig` with it is a possible future simplification.
 
-### C API (`ghostty_vt.h`)
+## Theme and fonts
 
-```c
-// Terminal lifecycle
-ghostty_vt_terminal_t ghostty_vt_terminal_new(uint16_t cols, uint16_t rows);
-void                  ghostty_vt_terminal_free(terminal);
-void                  ghostty_vt_terminal_set_default_colors(terminal, fg_r,g,b, bg_r,g,b);
+Colors and font come from `~/.config/ghostty/config`: `theme`, `palette = N=#RRGGBB`, `font-family`, and `font-size`. The theme file is read from the Ghostty app bundle, and the palette is applied to the VT through OSC 4 at session start. Foreground and background fall back to Obsidian's CSS. The Nocturnal Winter Obsidian theme lives in machine-cfg and is linked by `make setup-themes`.
 
-// Input
-int  ghostty_vt_terminal_feed(terminal, bytes, len);
-int  ghostty_vt_terminal_resize(terminal, cols, rows);
-
-// Scrollback
-int  ghostty_vt_terminal_scroll_viewport(terminal, delta_lines);
-int  ghostty_vt_terminal_scroll_viewport_top(terminal);
-int  ghostty_vt_terminal_scroll_viewport_bottom(terminal);
-
-// Cursor
-bool ghostty_vt_terminal_cursor_position(terminal, col_out, row_out);
-
-// Plain text — used in reference impl, discards all style data
-ghostty_vt_bytes_t ghostty_vt_terminal_dump_viewport(terminal);
-ghostty_vt_bytes_t ghostty_vt_terminal_dump_viewport_row(terminal, row);
-
-// ── Rich data — not yet exposed in reference N-API addon ────────────────────
-
-// Per-cell styles: packed CellStyle[cols] — 8 bytes per cell
-ghostty_vt_bytes_t ghostty_vt_terminal_dump_viewport_row_cell_styles(terminal, row);
-
-// Style runs (efficient): packed StyleRun[] — adjacent same-style cells collapsed
-ghostty_vt_bytes_t ghostty_vt_terminal_dump_viewport_row_style_runs(terminal, row);
-
-// Dirty rows: u16[] of row indices changed since last call
-ghostty_vt_bytes_t ghostty_vt_terminal_take_dirty_viewport_rows(terminal, rows);
-
-// Scroll delta since last call
-int32_t ghostty_vt_terminal_take_viewport_scroll_delta(terminal);
-
-// OSC 8 hyperlink URI at cell — null if none (Claude Code uses this for file paths)
-ghostty_vt_bytes_t ghostty_vt_terminal_hyperlink_at(terminal, col, row);
-```
-
-### Data structures
-
-```c
-struct CellStyle {           // 8 bytes, one per cell column
-  uint8_t fg_r, fg_g, fg_b; // foreground RGB, resolved from 256-color palette
-  uint8_t bg_r, bg_g, bg_b; // background RGB, resolved
-  uint8_t flags;             // 0x01 inverse  0x02 bold    0x04 italic
-                             // 0x08 underline 0x10 faint  0x20 invisible
-                             // 0x40 strikethrough
-  uint8_t reserved;
-};
-
-struct StyleRun {            // 12 bytes, variable count per row
-  uint16_t start_col;        // inclusive
-  uint16_t end_col;          // exclusive
-  uint8_t  fg_r, fg_g, fg_b;
-  uint8_t  bg_r, bg_g, bg_b;
-  uint8_t  flags;            // same bitset
-  uint8_t  reserved;
-};
-```
-
----
-
-## Work Items
-
-For the exact current repo state, latest visual feedback, and resume notes, see
-[HANDOFF.md](HANDOFF.md).
-
-### 1. Toolchain ✅
-
-- [x] Zig 0.15.2 auto-downloaded for aarch64-macos by `make native` (no MacPorts dependency)
-- [x] No MacPorts port for libghostty — built from vendored Ghostty source via `zig build`
-- [x] xcrun shim injected during Zig build so macOS 26 SDK probe returns MacOSX15.4.sdk (Zig 0.15 doesn't recognise the macOS 26 SDK name)
-- **Note:** Zig 0.16 does NOT build Ghostty v1.3.1 (`std.Io` / `std.posix` breaking changes). Pinned at 0.15.2. Upgrade path: re-vendor Ghostty v1.4.0 + bump `minimum_zig_version = "0.16"`.
-
-### 2. Fork and Update Reference Repo ✅
-
-- [x] Copied (not forked) ComputelessComputer/obsidian-ghostty
-- [x] Update vendored Ghostty from `v1.2.3` → `v1.3.1`
-- [x] Pinned Zig 0.15.2 (see note in §1); `build.zig.zon` sets `minimum_zig_version = "0.15.2"`
-- [x] Update Electron target: `37.6.0` → `39.8.3` in all build scripts
-- [x] Rebuilt node-pty against Electron 39.8.3 / ABI 140
-- [x] Updated `obsidian` devDep to 1.12.x types
-- [x] Removed `bootstrap-zig.mjs`; `build-ghostty-vt.mjs` resolves pinned `vendor/zig/0.15.2/zig`
-- [x] `libghostty_vt.a` (4.3 MB) + `ghostty_vt.node` (972 KB) build clean on aarch64
-- [x] Plugin installed to `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`; orac and daneel vaults symlink into it
-- [x] Gate passed: live shell renders in vault, viewport dump confirms prompt
-
-### 3. Expand N-API Addon (`ghostty_vt.cc`) ✅
-
-- [x] `dumpViewportRowStyleRuns(row: number): Buffer` — 12 bytes/StyleRun
-- [x] `takeDirtyViewportRows(totalRows: number): Buffer` — 2 bytes/row (u16 LE indices)
-- [x] `takeViewportScrollDelta(): number`
-- [x] `hyperlinkAt(col: number, row: number): string | null`
-- [x] `setDefaultColors(fg: number, bg: number): void` — 0xRRGGBB args, unpacked in C++
-- [x] `ghostty.ts` updated: new method types + `StyleRun` type + `parseStyleRuns()` + `parseDirtyRows()` helpers
-- [x] Gate passed: all 5 methods verified live in Obsidian eval (`styleRunsByteLen=12`, `dirtyRowsByteLen=4`, etc.)
-
-### 4. Canvas Renderer
-
-Replace `<pre>` + `dumpViewport()` plain text with a Canvas 2D renderer:
-
-- [x] Measure monospace char dimensions once on init; remeasure on resize
-- [x] Each frame: call `takeDirtyViewportRows()` -> only repaint changed rows
-- [x] Per dirty row: fetch text (`dumpViewportRow`) + style runs (`dumpViewportRowStyleRuns`)
-- [x] Zip text characters with style runs -> `fillText` per run with `fillRect` background
-- [x] Apply flags: bold -> `font-weight: bold`, italic -> `font-style: italic`, underline/strikethrough -> line strokes
-- [ ] Handle scroll delta via `takeViewportScrollDelta()` -> shift canvas without full repaint. Current code detects scroll deltas but forces repaint instead of shifting pixels.
-- [x] Cursor: overlay block cursor at `cursorPosition()` coords
-- [ ] Fix terminal-cell fidelity for wide glyphs, emoji, combining marks, dense tables, and long prompt/status rows. See `HANDOFF.md` for the latest visual symptoms.
-
-#### Font Strategy (design decision)
-
-The Canvas renderer reads font settings directly from `~/.config/ghostty/config` at plugin startup rather than inheriting from Obsidian's CSS theme. This is an intentional design choice:
-
-- **Why**: The terminal exists to mirror Ghostty. Using the same font family and size produces identical character density, glyph shapes, and Nerd Font icons. Obsidian's CSS theme is irrelevant — `--font-monospace` and `--line-height-normal` are for Obsidian's own UI, not a terminal emulator.
-- **Implementation** (`parseGhosttyConfig` + `resolveFontFamily` in `main.ts`):
-  1. Read `font-family` and `font-size` from `~/.config/ghostty/config` (falls back to `~/Library/Application Support/com.mitchellh.ghostty/config`)
-  2. Ghostty stores font-family as the PostScript/filename form (e.g. `SauceCodeProNerdFontMono-Regular`). Canvas needs the CSS family name but we assign our own (`GhosttyTerminalFont`) when loading via FontFace — no `fc-list` needed.
-  3. Fall back to `monospace` at 13px if the config is absent or unreadable.
-  4. Store as `GhosttyPlugin.terminalFont: { family, size }` and use in every `getCanvasFont()` call.
-- **Row height**: `Math.ceil(fontBoundingBoxAscent + fontBoundingBoxDescent)` with no extra leading. Ghostty uses the font's own line box with no added leading; we match that exactly.
-- **Future**: Add plugin settings to override `terminalFont` without editing the Ghostty config (useful for people who want a different size in the panel vs. their main terminal).
-
-### 5. Hyperlink Hit-Testing (the Claude Code integration piece)
-
-- [x] `mousemove`: convert pixel (x,y) -> (col, row); call `hyperlinkAt()` -> show pointer + underline
-- [x] `click`: resolve URI type:
-  - `file:///path/to/file` or bare path -> `app.vault.getAbstractFileByPath()` -> open as Obsidian note
-  - `https://` / `http://` -> `window.open()` in default browser
-  - Relative paths (e.g. `src/foo.ts:42`) -> resolve against vault root or active file
-- [x] Show URI in a tooltip on hover
-- [ ] Verify against real Claude/Codex OSC 8 output and decide behavior for non-vault files.
-
-### 6. Claude Code UX (from obsidian-claude-sidebar)
-
-- [ ] Default launch command: `claude` (configurable in plugin settings)
-- [ ] Right-click file/folder in Obsidian file tree → "Open Claude here" → spawn terminal with `cwd` set to that path
-- [ ] Cmd+J (or configurable) to toggle terminal panel
-- [ ] On vault open: optionally auto-launch Claude with `claude --continue` to resume last session
-- [ ] Plugin settings: shell command, default cwd, font size, color theme defaults
-
-### 7. Theme Integration
-
-- [x] Read Obsidian CSS-derived foreground/background for default fg/bg
-- [x] Pass to `ghostty_vt_terminal_set_default_colors()` on init
-- [x] Observe theme changes -> re-pass colors + trigger full repaint
-- [x] Colors: read `theme` and `palette` from `~/.config/ghostty/config`; load theme file from Ghostty app bundle; apply via OSC 4 sequences at session start. `foreground`/`background` from theme override Obsidian CSS defaults.
-
-#### Active Theme: Nocturnal Winter
-
-Config: `~/.config/ghostty/config`
-
-```
-theme = Nocturnal Winter
-font-family = SauceCodeProNerdFontMono-Regular
-font-size = 18
-```
-
-Theme file: `/Applications/Ghostty.app/Contents/Resources/ghostty/themes/Nocturnal Winter`
-
-| Index | Hex | Role |
-|---|---|---|
-| 0 | `#4d4d4d` | black |
-| 1 | `#f12d52` | red |
-| 2 | `#09cd7e` | green |
-| 3 | `#f5f17a` | yellow |
-| 4 | `#3182e0` | blue |
-| 5 | `#ff2b6d` | magenta |
-| 6 | `#09c87a` | cyan |
-| 7 | `#fcfcfc` | white |
-| 8 | `#808080` | bright black |
-| 9 | `#f16d86` | bright red |
-| 10 | `#0ae78d` | bright green |
-| 11 | `#fffc67` | bright yellow |
-| 12 | `#6096ff` | bright blue |
-| 13 | `#ff78a2` | bright magenta |
-| 14 | `#0ae78d` | bright cyan |
-| 15 | `#ffffff` | bright white |
-| fg | `#e6e5e5` | foreground |
-| bg | `#0d0d17` | background |
-| cursor | `#e6e5e5` / text `#a6a6a6` | cursor |
-| selection | `#adbdd0` / fg `#000000` | selection |
-
-### 8. Distribution
-
-Native `.node` files can't ship via the community store's `main.js`-only constraint.
-
-- **Phase 1 (dev/personal):** build locally via `npm run build:native:electron`. MacPorts port handles libghostty-vt. Document as developer install.
-- **Phase 2 (community store):** evaluate runtime-download model — per-ABI ZIP from GitHub Releases (O-Terminal pattern). Requires maintaining builds for each Electron ABI as Obsidian updates.
-
----
-
-## Build Flow
+## Build flow
 
 ```bash
-# Fresh clone (downloads Zig 0.15.2 aarch64, builds both .node files, syncs to machine-cfg)
-make install
-
-# Set up vault symlinks (orac + daneel → machine-cfg central dir)
-make setup-vaults
-
-# Development loop
-make reinstall          # rebuild JS and sync (most common)
-make reinstall-runtime  # rebuild JS + sync current .node files
-make native             # rebuild ghostty_vt.node (Zig or C++ changed)
-make pty                # rebuild pty.node (node-pty or Electron bump)
-make check              # type-check + bundle
-npm run dev             # esbuild watch mode
+make doctor             # check prerequisites
+make install            # full build + sync to the central plugin dir
+make setup-vaults       # symlink the plugin into each vault
+make reinstall          # fast loop: JS only
+make reinstall-runtime  # JS + native addon + node-pty
 ```
+
+## Distribution
+
+Native `.node` files cannot ship through the community store's `main.js`-only constraint, so this is a local developer install. A possible future path is a runtime download of a per-Electron-ABI build from GitHub Releases.
+
+## Findings and backlog
+
+### Kitty graphics: timg and cursor-positioned placement (2026-10-03)
+
+Question: can `timg` render an image through the Kitty protocol inside a Claude session in the plugin?
+
+Findings (measured from a Claude session in the `orac` vault with `timg 1.6.3`):
+
+- `timg -pk` emits `ESC[?25l ESC_Ga=T,i=<random>,q=2,f=100,m=1;<base64 PNG>…`: direct PNG (`f=100`, default `t=d`), chunked (`m=1`), transmit-and-display at the cursor (`a=T`), responses suppressed (`q=2`). It uses no `U=1` and no Unicode placeholder characters. `--compress` did not change the prefix.
+- The plugin only handles direct PNG with Unicode virtual placements (`U=1`), the form Copilot CLI uses. It does not paint `a=T` placements positioned at the cursor, so timg output would not render even if it reached the terminal.
+- A Claude session cannot deliver it anyway. The Bash tool's subprocess has no controlling terminal (`tty` reports "not a tty", opening `/dev/tty` fails with "Device not configured"), and stdout is captured and returned to the model, so the escape bytes never reach the pty. `timg` also needs `-g<cols>x<rows>` when it has no tty. Claude Code's `!` shell escape captures output as well. This blocker is outside the plugin.
+
+Decision: do not pursue now. Merge the modernization first, then treat timg as a follow-up.
+
+Backlog options:
+
+1. **Cursor-positioned placement**, so `timg -pk` works in a plain shell tab ("New shell (no Agent)"). The PNG and chunk decoding in `kitty-graphics.ts` already exists. New work: honor `a=T` / `a=p`, anchor the image to the cursor cell, size it from pixel dimensions or `c=` / `r=`, move the cursor past it, and keep it attached to scrollback. A different route is to rewrite the sequence to `U=1` plus placeholder cells.
+2. **Side channel for Claude sessions.** Something a tool call can invoke (a small command writing to a file or socket the plugin watches) that makes the plugin draw an image in the pane. This is a larger design decision.
+
+Suggested order: option 1, then decide on option 2.

@@ -19,14 +19,10 @@
 /native/ghostty_vt/zig/zig-out/
 /native/ghostty_vt/zig/zig-pkg/
 /native/ghostty_vt/zig/.zig-cache/
-/vendor/zig/*/zig
-/vendor/zig/*/doc/
-/vendor/sdk/
 
 # Tool caches
 /.cache/
 /.zig-cache/
-/.zig-shim/
 .eslintcache
 *.tsbuildinfo
 

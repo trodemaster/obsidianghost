@@ -1,4 +1,4 @@
-// Live probe for Cmd+click on plain-text URLs (see HANDOFF.md).
+// Live probe for Cmd+click on plain-text URLs (see CLAUDE.md).
 // Run via: scripts/live-test.sh scripts/tests/plain-url-links.js
 (async () => {
   const VIEW_TYPE = "ghostty-terminal-view";

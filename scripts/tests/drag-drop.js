@@ -1,4 +1,4 @@
-// Live probe for drag-and-drop file/image path insertion (see HANDOFF.md).
+// Live probe for drag-and-drop file/image path insertion (see CLAUDE.md).
 //
 // A synthetic File object has no real OS-drag path association, so
 // webUtils.getPathForFile would throw/return empty for it. We instead monkey-patch

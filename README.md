@@ -6,26 +6,31 @@ The plugin ID stays `obsidian-claude-ghostty` so saved layouts, enabled-plugin e
 
 ## Requirements
 
-- macOS on Apple Silicon (the Zig download and native build target `aarch64-macos`)
-- Obsidian 1.12.0 or newer (desktop only; the native addon targets Electron 39)
-- Node.js and npm
-- Xcode Command Line Tools
-- Zig 0.15.2 — downloaded automatically into `vendor/zig/0.15.2/` by `make`
-- A compatible macOS SDK. Zig 0.15 cannot link against newer SDK stubs, so on recent macOS releases put `MacOSX15.4.sdk` in `vendor/sdk/` (ignored by Git) or set `MACOS_SDK_PATH`. `/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk` is also found automatically.
+macOS on Apple Silicon with Obsidian 1.12.0 or newer (desktop only). Install the toolchain with MacPorts:
 
-Ghostty sources are vendored under `vendor/ghostty`, so no submodule step is needed.
+```bash
+sudo port install zig-0.16 nodejs22 npm10 python314
+xcode-select --install     # if the Xcode Command Line Tools are missing
+```
+
+- Zig 0.16 builds libghostty-vt from the vendored Ghostty sources (`vendor/ghostty`, no submodule step). It links against the stock macOS SDK, so no extra SDK is needed.
+- Node.js, npm and Python 3 are used by esbuild and node-gyp.
+- The native addons are built for the Electron version of the **installed Obsidian**, which the Makefile reads automatically (override with `ELECTRON_VERSION=x.y.z`).
+
+`make doctor` checks all of this and lists anything that is missing; the build targets run it first.
 
 ## Install
 
 ```bash
 git clone https://github.com/trodemaster/obsidianghost.git
 cd obsidianghost
+make doctor
 make install
 make setup-vaults
 ```
 
-- `make install` runs `npm install`, bundles the plugin, builds `ghostty_vt.node` and `pty.node` for Electron 39, and syncs `manifest.json`, `styles.css`, `main.js`, and the native payload into the central plugin directory, `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Override it with `make install PLUGIN_DIR=/path`.
-- `make setup-vaults` symlinks that directory into `<vault>/.obsidian/plugins/obsidian-claude-ghostty` for each vault listed in `VAULTS` at the top of the `Makefile` (default `~/orac` and `~/daneel`). It is idempotent and skips missing vaults. Edit `VAULTS` for your own vaults, or symlink manually.
+- `make install` runs `npm install`, builds `ghostty_vt.node` and `pty.node` for Obsidian's Electron, bundles the plugin, and syncs `manifest.json`, `styles.css`, `main.js`, and the native payload into the central plugin directory, `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Override it with `make install PLUGIN_DIR=/path`.
+- `make setup-vaults` symlinks that directory into `<vault>/.obsidian/plugins/obsidian-claude-ghostty` for each vault in `VAULTS` (default `~/orac` and `~/daneel`; override with `make setup-vaults VAULTS="..."`). It is idempotent and skips missing vaults.
 - Optionally run `make setup-themes` to link the Nocturnal Winter theme, then select it once in **Settings → Appearance**.
 
 Then in Obsidian: **Settings → Community plugins**, turn off Restricted mode if needed, and enable **Agent Ghostty Terminal**. Click the ghost icon in the left ribbon to open a terminal. Cmd+J closes it while focused, and **Toggle terminal** is available as a command you can bind to any hotkey.
@@ -34,28 +39,28 @@ Then in Obsidian: **Settings → Community plugins**, turn off Restricted mode i
 
 ```bash
 git pull
-make reinstall                      # TypeScript/CSS changes only
-make reinstall-runtime              # also re-sync the native addon and node-pty
-make native pty reinstall-runtime   # Zig, node-pty, or Electron changes
+make reinstall           # TypeScript/CSS changes only
+make install             # Zig, node-pty, vendored Ghostty, or Obsidian/Electron changes
 ```
 
 After syncing JS, reload with `Cmd+P` → "Reload app without saving". After syncing a new `.node` file, restart Obsidian: a plugin reload alone can keep Node's old addon cache, and an outdated addon is reported explicitly. Reloads and restarts end embedded terminal sessions.
 
 ### Troubleshooting
 
-- **`Zig 0.15 requires a compatible SDK`**: install `MacOSX15.4.sdk` into `vendor/sdk/` or export `MACOS_SDK_PATH`.
+- **`make doctor` reports MISSING**: run the `port install` command it prints.
+- **`npm install` says the cache has root-owned files**: `sudo chown -R 501:20 ~/.npm`.
 - **Plugin missing in Obsidian**: confirm the vault symlink exists, then restart Obsidian.
-- **Native module load or version errors**: run `make native pty reinstall-runtime` and restart Obsidian.
-- **Zig 0.16 build failures**: Ghostty v1.3.1 needs Zig 0.15.2. Use the pinned toolchain from `make`.
+- **Native module load or version errors**: run `make install` and restart Obsidian.
 
 ## Settings
 
 In **Settings → Community plugins → Agent Ghostty Terminal**:
 
 - **Start directory**: blank opens terminals at the vault root. Accepts an absolute path, a `~`-prefixed path, or a vault-relative path.
+- **Shell**: path to the shell to start. Blank auto-detects MacPorts bash (`/opt/local/bin/bash`) when installed, otherwise `/bin/bash` (macOS's bash 3.2).
 - **Startup command**: an optional shell command or script, run once in each new or restored terminal in the start directory. Blank starts only the shell; there is no built-in agent command. For Claude Code, set it to `claude --continue`.
 
-Terminals start Bash on macOS/Linux. Right-click the ghost ribbon icon or the terminal's **+** button and choose **New shell (no Agent)** to bypass the startup command. Settings changes affect subsequent terminals, not running sessions. Installations shared between vaults via symlinks also share their settings.
+Terminals start the configured shell. Right-click the ghost ribbon icon or the terminal's **+** button and choose **New shell (no Agent)** to bypass the startup command. Settings changes affect subsequent terminals, not running sessions. Installations shared between vaults via symlinks also share their settings.
 
 > Earlier versions auto-launched `claude --continue`. That is now an explicit startup command setting, so existing installs need to set it once.
 
@@ -73,7 +78,7 @@ Terminals start Bash on macOS/Linux. Right-click the ghost ribbon icon or the te
 
 Images render through Kitty graphics **direct PNG transmission and Unicode virtual placements** (`f=100`, `U=1`). Chunked transfers, image/placement deletion, placement resizing, and viewport redraws are supported. Placeholder diacritics stay attached to their terminal cells instead of appearing as missing-font glyphs.
 
-The image cache is limited to 64 MiB of decoded pixels per terminal. Unsupported formats/actions and invalid images are logged and receive protocol errors when replies are enabled. Raw RGB/RGBA, compressed transfers, file/shared-memory transmission, non-default placement IDs, traditional cursor-positioned Kitty placements, Sixel, and iTerm2 images are not supported.
+The image cache is limited to 64 MiB of decoded pixels per terminal. Unsupported formats/actions and invalid images are logged and receive protocol errors when replies are enabled. Raw RGB/RGBA, compressed transfers, file/shared-memory transmission, non-default placement IDs, traditional cursor-positioned Kitty placements (what `timg -pk` emits), Sixel, and iTerm2 images are not supported. Output captured by an agent's tool call, such as a Claude Code Bash tool, never reaches the terminal, so images must be printed by a program running directly in the shell.
 
 ### Text Rendering
 
@@ -88,15 +93,18 @@ Use a real family name in Ghostty, for example `font-family = SauceCodePro Nerd 
 ## Development
 
 ```bash
+make doctor             # check prerequisites
 make reinstall          # rebuild JS and sync — use on every TypeScript change
 make reinstall-runtime  # rebuild JS + sync current native binaries
 make native             # rebuild ghostty_vt.node (Zig source changed)
 make pty                # rebuild pty.node (node-pty source/Electron bump)
 make check              # type-check + bundle
-npm run test:images     # isolated image probe in running Obsidian; does not reload agents
-npm run test:rendering  # isolated native-cell, font, color, and pixel probe
+npm run test:images -- <vault>     # isolated image probe in running Obsidian; does not reload agents
+npm run test:rendering -- <vault>  # isolated native-cell, font, color, and pixel probe
 npm run dev             # esbuild watch mode
 ```
+
+The probes talk to a running Obsidian through its CLI: enable **Settings → General → Advanced → Command line interface** first, and open an Agent terminal in the target vault.
 
 For a measured Ghostty comparison, run the same fixture in Ghostty:
 `node scripts/rendering-fixture.cjs --measure /tmp/ghostty-cells.json` (press `q` to close), then run
@@ -104,5 +112,5 @@ For a measured Ghostty comparison, run the same fixture in Ghostty:
 
 ## Project Docs
 
-- [IMPLEMENTATION.md](IMPLEMENTATION.md) — full development spec and work items
-- [HANDOFF.md](HANDOFF.md) — current status, build/install notes, and next steps
+- [CLAUDE.md](CLAUDE.md) — conventions, toolchain, testing status, and next steps
+- [IMPLEMENTATION.md](IMPLEMENTATION.md) — architecture, native layer, and design findings
