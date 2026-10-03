@@ -1,4 +1,4 @@
-// Live probe for the Shift+Enter / TERM_PROGRAM fix (see HANDOFF.md).
+// Live probe for the Shift+Enter / TERM_PROGRAM fix (see CLAUDE.md).
 // Run via: scripts/live-test.sh scripts/tests/shift-enter.js
 //
 // Talks directly to the terminal view's internals through obsidian-cli's

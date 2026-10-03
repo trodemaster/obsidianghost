@@ -78,7 +78,7 @@ Terminals start the configured shell. Right-click the ghost ribbon icon or the t
 
 Images render through Kitty graphics **direct PNG transmission and Unicode virtual placements** (`f=100`, `U=1`). Chunked transfers, image/placement deletion, placement resizing, and viewport redraws are supported. Placeholder diacritics stay attached to their terminal cells instead of appearing as missing-font glyphs.
 
-The image cache is limited to 64 MiB of decoded pixels per terminal. Unsupported formats/actions and invalid images are logged and receive protocol errors when replies are enabled. Raw RGB/RGBA, compressed transfers, file/shared-memory transmission, non-default placement IDs, traditional cursor-positioned Kitty placements, Sixel, and iTerm2 images are not supported.
+The image cache is limited to 64 MiB of decoded pixels per terminal. Unsupported formats/actions and invalid images are logged and receive protocol errors when replies are enabled. Raw RGB/RGBA, compressed transfers, file/shared-memory transmission, non-default placement IDs, traditional cursor-positioned Kitty placements (what `timg -pk` emits), Sixel, and iTerm2 images are not supported. Output captured by an agent's tool call, such as a Claude Code Bash tool, never reaches the terminal, so images must be printed by a program running directly in the shell.
 
 ### Text Rendering
 
@@ -93,15 +93,18 @@ Use a real family name in Ghostty, for example `font-family = SauceCodePro Nerd 
 ## Development
 
 ```bash
+make doctor             # check prerequisites
 make reinstall          # rebuild JS and sync — use on every TypeScript change
 make reinstall-runtime  # rebuild JS + sync current native binaries
 make native             # rebuild ghostty_vt.node (Zig source changed)
 make pty                # rebuild pty.node (node-pty source/Electron bump)
 make check              # type-check + bundle
-npm run test:images     # isolated image probe in running Obsidian; does not reload agents
-npm run test:rendering  # isolated native-cell, font, color, and pixel probe
+npm run test:images -- <vault>     # isolated image probe in running Obsidian; does not reload agents
+npm run test:rendering -- <vault>  # isolated native-cell, font, color, and pixel probe
 npm run dev             # esbuild watch mode
 ```
+
+The probes talk to a running Obsidian through its CLI: enable **Settings → General → Advanced → Command line interface** first, and open an Agent terminal in the target vault.
 
 For a measured Ghostty comparison, run the same fixture in Ghostty:
 `node scripts/rendering-fixture.cjs --measure /tmp/ghostty-cells.json` (press `q` to close), then run
@@ -109,5 +112,5 @@ For a measured Ghostty comparison, run the same fixture in Ghostty:
 
 ## Project Docs
 
-- [IMPLEMENTATION.md](IMPLEMENTATION.md) — full development spec and work items
-- [HANDOFF.md](HANDOFF.md) — current status, build/install notes, and next steps
+- [CLAUDE.md](CLAUDE.md) — conventions, toolchain, testing status, and next steps
+- [IMPLEMENTATION.md](IMPLEMENTATION.md) — architecture, native layer, and design findings

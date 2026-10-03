@@ -57,3 +57,24 @@ make reinstall-runtime  # JS + native addon + node-pty
 ## Distribution
 
 Native `.node` files cannot ship through the community store's `main.js`-only constraint, so this is a local developer install. A possible future path is a runtime download of a per-Electron-ABI build from GitHub Releases.
+
+## Findings and backlog
+
+### Kitty graphics: timg and cursor-positioned placement (2026-10-03)
+
+Question: can `timg` render an image through the Kitty protocol inside a Claude session in the plugin?
+
+Findings (measured from a Claude session in the `orac` vault with `timg 1.6.3`):
+
+- `timg -pk` emits `ESC[?25l ESC_Ga=T,i=<random>,q=2,f=100,m=1;<base64 PNG>…`: direct PNG (`f=100`, default `t=d`), chunked (`m=1`), transmit-and-display at the cursor (`a=T`), responses suppressed (`q=2`). It uses no `U=1` and no Unicode placeholder characters. `--compress` did not change the prefix.
+- The plugin only handles direct PNG with Unicode virtual placements (`U=1`), the form Copilot CLI uses. It does not paint `a=T` placements positioned at the cursor, so timg output would not render even if it reached the terminal.
+- A Claude session cannot deliver it anyway. The Bash tool's subprocess has no controlling terminal (`tty` reports "not a tty", opening `/dev/tty` fails with "Device not configured"), and stdout is captured and returned to the model, so the escape bytes never reach the pty. `timg` also needs `-g<cols>x<rows>` when it has no tty. Claude Code's `!` shell escape captures output as well. This blocker is outside the plugin.
+
+Decision: do not pursue now. Merge the modernization first, then treat timg as a follow-up.
+
+Backlog options:
+
+1. **Cursor-positioned placement**, so `timg -pk` works in a plain shell tab ("New shell (no Agent)"). The PNG and chunk decoding in `kitty-graphics.ts` already exists. New work: honor `a=T` / `a=p`, anchor the image to the cursor cell, size it from pixel dimensions or `c=` / `r=`, move the cursor past it, and keep it attached to scrollback. A different route is to rewrite the sequence to `U=1` plus placeholder cells.
+2. **Side channel for Claude sessions.** Something a tool call can invoke (a small command writing to a file or socket the plugin watches) that makes the plugin draw an image in the pane. This is a larger design decision.
+
+Suggested order: option 1, then decide on option 2.
