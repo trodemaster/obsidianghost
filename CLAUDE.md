@@ -55,10 +55,11 @@ Status on 2026-10-03 (modernized build, `orac` vault, macOS 27.0.1, Obsidian Ele
 - `test:images`: pass, 19 of 19.
 - `test:rendering`: pass, 31 of 31, after the bold, italic and bold-italic faces were installed (via chezmoi) and the Ghostty config switched to the family name. This display runs at DPR 1, so the 22 × 45 DPR 2 cell-size reference does not apply here; the `fontBasedBoxStroke` check is DPR-aware.
 - The terminal tab starts `/opt/local/bin/bash` (verified from the process tree).
+- A real Claude Code session runs in the plugin terminal (checked by screenshot): tab and header follow the session title, and text styling, inline code, wrapping, emoji, status line and progress bars render without defects.
 
 ## Known issues and next steps
 
-- Try a real Claude Code session in the terminal, then open the PR for `modernize`.
+- Open the PR for `modernize` (all checks done; push the branch first).
 - Fonts: chezmoi installs the four SauceCodePro Nerd Font Mono faces (dotfiles `run_onchange_darwin.sh.tmpl`) and sets `font-family = SauceCodePro Nerd Font Mono`.
 - Cursor-positioned Kitty placement (`a=T`, what `timg -pk` emits) is the next image feature (see IMPLEMENTATION.md).
 - Two terminals in the same vault, each running `claude --continue`, race over the same session file and render blank. Use "New shell (no Agent)" for the second tab.
