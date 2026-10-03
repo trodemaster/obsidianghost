@@ -53,13 +53,13 @@ Enable Obsidian's CLI first (Settings → General → Advanced → Command line 
 Status on 2026-10-03 (modernized build, `orac` vault, macOS 27.0.1, Obsidian Electron 43.3.0):
 
 - `test:images`: pass, 19 of 19.
-- `test:rendering`: 30 of 32. `realFontFaces` fails because this machine has only the Regular face of SauceCode Pro Nerd Font Mono installed, and `~/.config/ghostty/config` names the font by filename. `fontBasedBoxStroke` also fails and was not investigated; it may share that cause. The probe reported DPR 1, so cell metrics don't match the 22 × 45 reference.
+- `test:rendering`: pass, 31 of 31, after the bold, italic and bold-italic faces were installed (via chezmoi) and the Ghostty config switched to the family name. This display runs at DPR 1, so the 22 × 45 DPR 2 cell-size reference does not apply here; the `fontBasedBoxStroke` check is DPR-aware.
 - The terminal tab starts `/opt/local/bin/bash` (verified from the process tree).
 
 ## Known issues and next steps
 
-- Merge the `modernize` branch through a PR once the font setup is fixed and `test:rendering` is re-run. Also try a real Claude Code session in the terminal.
-- Install the bold, italic and bold-italic faces and switch the Ghostty config to the family name, then re-run `test:rendering`. If `fontBasedBoxStroke` still fails, treat it as a regression.
+- Try a real Claude Code session in the terminal, then open the PR for `modernize`.
+- Fonts: chezmoi installs the four SauceCodePro Nerd Font Mono faces (dotfiles `run_onchange_darwin.sh.tmpl`) and sets `font-family = SauceCodePro Nerd Font Mono`.
 - Cursor-positioned Kitty placement (`a=T`, what `timg -pk` emits) is the next image feature (see IMPLEMENTATION.md).
 - Two terminals in the same vault, each running `claude --continue`, race over the same session file and render blank. Use "New shell (no Agent)" for the second tab.
 - Scroll uses a full repaint instead of shifting canvas pixels.

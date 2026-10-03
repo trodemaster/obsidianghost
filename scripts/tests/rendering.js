@@ -109,9 +109,11 @@
       if (((p[0] << 16) | (p[1] << 8) | p[2]) !== 0xe6e5e5) connected = false;
     }
     checks.boxLinesHaveNoPixelGaps = connected;
-    checks.fontBasedBoxStroke = boxPixels === 2 &&
-      ctx.getImageData(Math.round(3 * width * dpr), centerY + 1, 1, 1).data[0] === 0xe6 &&
-      ctx.getImageData(Math.round(3 * width * dpr), centerY + 2, 1, 1).data[0] === 0x0d;
+    // The font's stroke is 1 physical pixel at DPR 1 and 2 at DPR 2; the stroke must end
+    // exactly at its last row, with background directly below it.
+    checks.fontBasedBoxStroke = boxPixels === (dpr >= 2 ? 2 : 1) &&
+      ctx.getImageData(Math.round(3 * width * dpr), centerY + boxPixels - 1, 1, 1).data[0] === 0xe6 &&
+      ctx.getImageData(Math.round(3 * width * dpr), centerY + boxPixels, 1, 1).data[0] === 0x0d;
     const track = ctx.getImageData(Math.round(3 * width * dpr), Math.round(12 * height * dpr),
       Math.round(7 * width * dpr), Math.round(height * dpr)).data;
     const trackColor = parseStyleRuns(view.vt.dumpViewportRowStyleRuns(12))[0].fg;
