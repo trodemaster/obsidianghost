@@ -1,140 +1,113 @@
 SHELL := /bin/bash
 
-# ── plugin identity ───────────────────────────────────────────────────────────
+# ── configuration (override on the command line, e.g. make install PLUGIN_DIR=...) ──
 PLUGIN_ID  := obsidian-claude-ghostty
-PLUGIN_DIR := $(HOME)/Developer/machine-cfg/obsisian/plugins/$(PLUGIN_ID)
+PLUGIN_DIR ?= $(HOME)/Developer/machine-cfg/obsisian/plugins/$(PLUGIN_ID)
 
 THEME_NAME := Nocturnal Winter
-THEME_DIR  := $(HOME)/Developer/machine-cfg/obsisian/themes/$(THEME_NAME)
+THEME_DIR  ?= $(HOME)/Developer/machine-cfg/obsisian/themes/$(THEME_NAME)
 
 # Obsidian vaults that get symlinks into the central plugin and theme dirs
-VAULTS := $(HOME)/orac $(HOME)/daneel
+VAULTS ?= $(HOME)/orac $(HOME)/daneel
 
-# ── Zig 0.15.2 ───────────────────────────────────────────────────────────────
-# Zig 0.16 breaks Ghostty v1.3.1 (uucode std.Io API change). Pinned at 0.15.2.
-ZIG           := $(CURDIR)/vendor/zig/0.15.2/zig
+# Toolchain (MacPorts: zig-0.16, nodejs22, npm10, python314)
+ZIG ?= zig-0.16
+OBSIDIAN_APP ?= /Applications/Obsidian.app
 
-RSYNC        := rsync -a
-RSYNC_DELETE := rsync -a --delete
+# Native addons are built for the Electron that the installed Obsidian ships.
+ELECTRON_VERSION ?= $(shell plutil -extract CFBundleVersion raw \
+  "$(OBSIDIAN_APP)/Contents/Frameworks/Electron Framework.framework/Resources/Info.plist" 2>/dev/null)
 
-# Stamp guards npm install so it only runs once (until node_modules is wiped).
-# --ignore-scripts skips node-pty's postinstall node-gyp (wrong runtime target).
-# Native addons are built explicitly via `make native` and `make pty`.
+NODE_GYP = npx node-gyp rebuild --runtime=electron --target=$(ELECTRON_VERSION) \
+  --arch=arm64 --dist-url=https://electronjs.org/headers --devdir=$(CURDIR)/.cache/node-gyp
+
+# npm install --ignore-scripts skips node-pty's own node-gyp run (wrong runtime);
+# `make pty` rebuilds it for Electron.
 STAMP := node_modules/.install-stamp
 
 .DEFAULT_GOAL := help
-
-.PHONY: help print-vars deps check build native pty install reinstall \
-        reinstall-runtime sync-plugin sync-native sync-node-pty \
-        setup-vaults setup-themes clean dev ensure-plugin-dir
+.PHONY: help doctor deps check build native pty install reinstall reinstall-runtime \
+        sync-js sync-runtime setup-vaults setup-themes dev clean
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
-		'  make install            Fresh-clone setup: npm install + native + pty + sync all' \
-		'  make reinstall          Fast loop: build JS and sync manifest/styles/main.js' \
-		'  make reinstall-runtime  Sync JS plus current native addon and node-pty payload' \
-		'  make setup-vaults       Create plugin symlinks in orac and daneel vaults' \
-		'  make setup-themes       Create Nocturnal Winter theme symlinks in orac and daneel vaults (then select once in Settings → Appearance)' \
-		'  make check              Type-check and build the plugin bundle' \
-		'  make native             Rebuild libghostty-vt + ghostty_vt.node for Obsidian Electron' \
-		'  make pty                Rebuild node-pty for Obsidian Electron' \
-		'  make dev                Run esbuild in watch mode' \
+		'  make doctor             Check prerequisites and list anything missing' \
+		'  make install            Full build (JS + native + pty) and sync to the plugin dir' \
+		'  make reinstall          Fast loop: rebuild JS and sync manifest/styles/main.js' \
+		'  make reinstall-runtime  Rebuild JS and also sync native addon + node-pty' \
+		'  make native             Rebuild libghostty-vt + ghostty_vt.node (Zig 0.16)' \
+		'  make pty                Rebuild node-pty for the installed Obsidian Electron' \
+		'  make check              Type-check and bundle' \
+		'  make dev                esbuild watch mode' \
+		'  make setup-vaults       Symlink the plugin into each vault' \
+		'  make setup-themes       Symlink the Nocturnal Winter theme into each vault' \
+		'  make clean              Remove build output and caches' \
 		'' \
-		'Variables:' \
-		'  PLUGIN_DIR=/path        Default: $(PLUGIN_DIR)'
+		'Variables: PLUGIN_DIR, VAULTS, ZIG, ELECTRON_VERSION, OBSIDIAN_APP' \
+		'  PLUGIN_DIR=$(PLUGIN_DIR)' \
+		'  ELECTRON_VERSION=$(ELECTRON_VERSION)'
 
-print-vars:
-	@printf 'PLUGIN_ID=%s\nPLUGIN_DIR=%s\nVAULTS=%s\nZIG=%s\n' \
-		"$(PLUGIN_ID)" "$(PLUGIN_DIR)" "$(VAULTS)" "$(ZIG)"
+doctor:
+	@ZIG="$(ZIG)" OBSIDIAN_APP="$(OBSIDIAN_APP)" PLUGIN_DIR="$(PLUGIN_DIR)" VAULTS="$(VAULTS)" scripts/doctor.sh
 
-$(STAMP):
+$(STAMP): package.json package-lock.json
 	npm install --ignore-scripts
 	touch $@
 
-deps: $(STAMP)
+deps: doctor $(STAMP)
 
-check:
+build: $(STAMP)
+	npm run build
+
+check: build
 	npx tsc --noEmit
-	npm run build
 
-build:
-	npm run build
+native: deps
+	cd native/ghostty_vt/zig && ZIG_GLOBAL_CACHE_DIR=$(CURDIR)/.cache/zig \
+	  $(ZIG) build -Doptimize=ReleaseFast -Dtarget=aarch64-macos.11.0 --prefix ../zig-out
+	$(NODE_GYP)
+	cp build/Release/ghostty_vt.node native/ghostty_vt.node
 
-# ── Zig toolchain ─────────────────────────────────────────────────────────────
+pty: deps
+	MACOSX_DEPLOYMENT_TARGET=11.0 $(NODE_GYP) --directory node_modules/node-pty
 
-$(ZIG):
-	mkdir -p $(dir $@)
-	curl -L https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz \
-	  | tar xJ --strip-components=1 -C $(dir $@)
+install: native pty build sync-js sync-runtime
 
-# ── native addon ──────────────────────────────────────────────────────────────
+reinstall: build sync-js
 
-native: $(STAMP) $(ZIG)
-	npm run build:native:electron
+reinstall-runtime: build sync-js sync-runtime
 
-# ── node-pty ─────────────────────────────────────────────────────────────────
+sync-js:
+	install -d "$(PLUGIN_DIR)"
+	rsync -a manifest.json styles.css main.js "$(PLUGIN_DIR)/"
 
-pty: $(STAMP)
-	npm_config_devdir=/tmp/node-gyp npm run build:pty:electron
+sync-runtime:
+	install -d "$(PLUGIN_DIR)/native" "$(PLUGIN_DIR)/node_modules"
+	rsync -a native/ghostty_vt.node "$(PLUGIN_DIR)/native/"
+	rsync -a --delete node_modules/node-pty "$(PLUGIN_DIR)/node_modules/"
 
-# ── install ──────────────────────────────────────────────────────────────────
-
-install: $(STAMP) build native pty sync-plugin sync-native sync-node-pty
-
-reinstall: build sync-plugin
-
-reinstall-runtime: build sync-plugin sync-native sync-node-pty
-
-sync-plugin: ensure-plugin-dir
-	$(RSYNC) manifest.json styles.css main.js "$(PLUGIN_DIR)/"
-
-sync-native: ensure-plugin-dir
-	$(RSYNC) native/ghostty_vt.node "$(PLUGIN_DIR)/native/"
-
-sync-node-pty: ensure-plugin-dir
-	$(RSYNC_DELETE) node_modules/node-pty "$(PLUGIN_DIR)/node_modules/"
-
-ensure-plugin-dir:
-	install -d "$(PLUGIN_DIR)" "$(PLUGIN_DIR)/native" "$(PLUGIN_DIR)/node_modules"
-
-# ── vault symlinks ────────────────────────────────────────────────────────────
+# link <source> <dest-subdir> over every vault; idempotent, never overwrites real dirs
+define link_into_vaults
+	@for v in $(VAULTS); do \
+	  if [ ! -d "$$v" ]; then printf 'WARN  vault not found: %s — skipping\n' "$$v"; continue; fi; \
+	  target="$$v/.obsidian/$(2)"; \
+	  if [ -L "$$target" ]; then printf 'skip  %s (symlink exists)\n' "$$target"; \
+	  elif [ -e "$$target" ]; then printf 'WARN  %s exists but is not a symlink — skipping\n' "$$target"; \
+	  else mkdir -p "$$(dirname "$$target")" && ln -s "$(1)" "$$target" && printf 'link  %s\n' "$$target"; fi; \
+	done
+endef
 
 setup-vaults:
-	@for v in $(VAULTS); do \
-	  if [ ! -d "$$v" ]; then \
-	    printf 'WARN  vault not found: %s — skipping\n' "$$v"; \
-	    continue; \
-	  fi; \
-	  target=$$v/.obsidian/plugins/$(PLUGIN_ID); \
-	  if [ -L "$$target" ]; then \
-	    printf 'skip  %s (symlink exists)\n' "$$target"; \
-	  elif [ -e "$$target" ]; then \
-	    printf 'WARN  %s exists but is not a symlink — skipping\n' "$$target"; \
-	  else \
-	    mkdir -p "$$v/.obsidian/plugins" && \
-	    ln -s "$(PLUGIN_DIR)" "$$target" && printf 'link  %s\n' "$$target"; \
-	  fi; \
-	done
+	$(call link_into_vaults,$(PLUGIN_DIR),plugins/$(PLUGIN_ID))
 
+# After linking, select the theme once in Settings → Appearance.
 setup-themes:
-	@for v in $(VAULTS); do \
-	  target="$$v/.obsidian/themes/$(THEME_NAME)"; \
-	  if [ -L "$$target" ]; then \
-	    printf 'skip  %s (symlink exists)\n' "$$target"; \
-	  elif [ -e "$$target" ]; then \
-	    printf 'WARN  %s exists but is not a symlink — skipping\n' "$$target"; \
-	  else \
-	    mkdir -p "$$v/.obsidian/themes" && \
-	    ln -s "$(THEME_DIR)" "$$target" && printf 'link  %s\n' "$$target"; \
-	  fi; \
-	done
+	$(call link_into_vaults,$(THEME_DIR),themes/$(THEME_NAME))
 
-# ── housekeeping ─────────────────────────────────────────────────────────────
-
-dev:
+dev: $(STAMP)
 	npm run dev
 
 clean:
-	npm run clean:native
-	rm -rf "$(CURDIR)/.zig-cache" "$(CURDIR)/.zig-shim"
+	rm -rf build native/ghostty_vt.node native/ghostty_vt/zig-out native/ghostty_vt/zig/.zig-cache \
+	  .cache/zig .zig-cache main.js

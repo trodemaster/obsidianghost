@@ -1,0 +1,4 @@
+repo: https://github.com/ghostty-org/ghostty
+commit: befcdfd2c3a1cb24d9ec886e93c95b2b5daa7028
+date: 2026-10-03
+zig: 0.16.0 (minimum)

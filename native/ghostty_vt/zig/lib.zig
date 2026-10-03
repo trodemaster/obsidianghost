@@ -2,7 +2,7 @@ const std = @import("std");
 const ghostty_input = @import("ghostty_src/input.zig");
 const key_encode = @import("ghostty_src/input/key_encode.zig");
 const terminal = @import("ghostty_src/terminal/main.zig");
-const config = @import("ghostty_src/config.zig");
+const TinyIo = @import("ghostty_src/lib/TinyIo.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -20,7 +20,8 @@ const TerminalHandle = struct {
         const handle = try alloc.create(TerminalHandle);
         errdefer alloc.destroy(handle);
 
-        const t = try terminal.Terminal.init(alloc, .{
+        const tiny_io: TinyIo = .init;
+        const t = try terminal.Terminal.init(tiny_io.io(), alloc, .{
             .cols = cols,
             .rows = rows,
         });
@@ -42,8 +43,7 @@ const TerminalHandle = struct {
         handle.handler.terminal = &handle.terminal;
         handle.handler.default_fg = &handle.default_fg;
         handle.handler.default_bg = &handle.default_bg;
-        // initAlloc wires up osc_parser.alloc (replaces v1.2.3 manual assignment)
-        handle.stream = terminal.Stream(*Handler).initAlloc(alloc, &handle.handler);
+        handle.stream = terminal.Stream(*Handler).init(.{ .handler = &handle.handler, .allocator = alloc });
         return handle;
     }
 
@@ -243,6 +243,16 @@ const Handler = struct {
         self: *Handler,
         comptime action: terminal.StreamAction.Tag,
         value: terminal.StreamAction.Value(action),
+    ) void {
+        self.vtFallible(action, value) catch |err| {
+            std.log.warn("vt action {s} failed: {}", .{ @tagName(action), err });
+        };
+    }
+
+    fn vtFallible(
+        self: *Handler,
+        comptime action: terminal.StreamAction.Tag,
+        value: terminal.StreamAction.Value(action),
     ) !void {
         switch (action) {
             // --- character output ---
@@ -404,7 +414,7 @@ export fn ghostty_vt_terminal_feed(
 
     var i: usize = 0;
     while (i < len) : (i += 1) {
-        handle.stream.next(bytes[i]) catch return 2;
+        handle.stream.next(bytes[i]);
     }
 
     return 0;
@@ -418,11 +428,10 @@ export fn ghostty_vt_terminal_resize(
     if (terminal_ptr == null) return 1;
     const handle: *TerminalHandle = @ptrCast(@alignCast(terminal_ptr.?));
 
-    handle.terminal.resize(
-        handle.alloc,
-        @as(terminal.size.CellCountInt, @intCast(cols)),
-        @as(terminal.size.CellCountInt, @intCast(rows)),
-    ) catch return 2;
+    handle.terminal.resize(handle.alloc, .{
+        .cols = @as(terminal.size.CellCountInt, @intCast(cols)),
+        .rows = @as(terminal.size.CellCountInt, @intCast(rows)),
+    }) catch return 2;
     return 0;
 }
 
@@ -584,7 +593,7 @@ export fn ghostty_vt_terminal_dump_viewport_row_cell_styles(
     for (cells) |*cell| {
         const s = pin.style(cell);
 
-        var fg = s.fg(.{ .default = default_fg, .palette = palette, .bold = if (s.flags.bold) config.BoldColor.bright else null });
+        var fg = s.fg(.{ .default = default_fg, .palette = palette, .bold = if (s.flags.bold) terminal.Style.BoldColor.bright else null });
         var bg = s.bg(cell, palette) orelse default_bg;
 
         var flags: u8 = 0;
@@ -654,7 +663,7 @@ fn resolvedStyle(
     if (s.flags.invisible) flags |= 0x20;
     if (s.flags.strikethrough) flags |= 0x40;
 
-    const fg = s.fg(.{ .default = default_fg, .palette = palette, .bold = if (s.flags.bold) config.BoldColor.bright else null });
+    const fg = s.fg(.{ .default = default_fg, .palette = palette, .bold = if (s.flags.bold) terminal.Style.BoldColor.bright else null });
     return .{ .fg = fg, .bg = default_bg, .flags = flags };
 }
 
@@ -847,7 +856,7 @@ fn pinScreenRow(pin: terminal.Pin) u32 {
     var y: u32 = @intCast(pin.y);
     var node_ = pin.node;
     while (node_.prev) |node| {
-        y += @intCast(node.data.size.rows);
+        y += @intCast(node.rows());
         node_ = node;
     }
     return y;
@@ -892,9 +901,10 @@ export fn ghostty_vt_terminal_hyperlink_at(
     const rac = pin.rowAndCell();
     if (!rac.cell.hyperlink) return .{ .ptr = null, .len = 0 };
 
-    const id = pin.node.data.lookupHyperlink(rac.cell) orelse return .{ .ptr = null, .len = 0 };
-    const entry = pin.node.data.hyperlink_set.get(pin.node.data.memory, id).*;
-    const uri = entry.uri.offset.ptr(pin.node.data.memory)[0..entry.uri.len];
+    const page = pin.node.page();
+    const id = page.lookupHyperlink(rac.cell) orelse return .{ .ptr = null, .len = 0 };
+    const entry = page.hyperlink_set.get(page.memory, id).*;
+    const uri = entry.uri.offset.ptr(page.memory)[0..entry.uri.len];
 
     const alloc = std.heap.c_allocator;
     const duped = alloc.dupe(u8, uri) catch return .{ .ptr = null, .len = 0 };

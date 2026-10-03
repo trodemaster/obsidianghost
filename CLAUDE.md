@@ -9,3 +9,7 @@ See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the full development spec: goals,
 ## Current handoff
 
 See [HANDOFF.md](HANDOFF.md) for current repo state, latest rendering status, build/install commands, and next steps.
+
+## Package management
+
+This machine uses MacPorts only. Use the `/macports` skill for installing or managing packages (Node.js, etc.); do not suggest or use Homebrew.

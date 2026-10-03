@@ -77,8 +77,8 @@ pub fn build(b: *std.Build) void {
     // step to give the output a ".zig" extension — Zig 0.15 requires anonymous module
     // source files to have that extension for the module-lookup to succeed.
     const wf = b.addWriteFiles();
-    const props_output = wf.addCopyFile(props_run.captureStdOut(), "props.zig");
-    const symbols_output = wf.addCopyFile(symbols_run.captureStdOut(), "symbols.zig");
+    const props_output = wf.addCopyFile(props_run.captureStdOut(.{}), "props.zig");
+    const symbols_output = wf.addCopyFile(symbols_run.captureStdOut(.{}), "symbols.zig");
 
     const lib = b.addLibrary(.{
         .name = "ghostty_vt",
@@ -89,7 +89,7 @@ pub fn build(b: *std.Build) void {
         }),
         .linkage = .static,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     lib.root_module.addImport("uucode", uucode_target.module("uucode"));
 
     // Wire up the terminal_options module required by Ghostty v1.3.1 internals.
@@ -103,6 +103,7 @@ pub fn build(b: *std.Build) void {
         .simd = false,
         .slow_runtime_safety = false,
         .c_abi = false,
+        .version = .{ .major = 1, .minor = 3, .patch = 2 },
     };
     term_build_opts.add(b, lib.root_module);
 

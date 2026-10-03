@@ -7,11 +7,7 @@
     "test:images": "node scripts/test-terminal.mjs kitty-images",
     "test:rendering": "node scripts/test-terminal.mjs rendering",
     "dev": "node esbuild.config.cjs",
-    "build": "node esbuild.config.cjs --production",
-    "build:native": "node scripts/build-ghostty-vt.mjs && node-gyp rebuild && cp build/Release/ghostty_vt.node native/ghostty_vt.node",
-    "build:native:electron": "node scripts/build-ghostty-vt.mjs && node-gyp rebuild --runtime=electron --target=39.8.3 --dist-url=https://electronjs.org/headers && cp build/Release/ghostty_vt.node native/ghostty_vt.node",
-    "build:pty:electron": "node-gyp rebuild --runtime=electron --target=39.8.3 --dist-url=https://electronjs.org/headers --directory node_modules/node-pty",
-    "clean:native": "rm -rf build native/ghostty_vt.node native/ghostty_vt/zig-out"
+    "build": "node esbuild.config.cjs --production"
   },
   "dependencies": {
     "node-addon-api": "^7.1.0",
