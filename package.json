@@ -1,7 +1,7 @@
 {
   "name": "obsidian-claude-ghostty",
   "version": "0.1.0",
-  "description": "Claude Code sidebar terminal for Obsidian — libghostty-vt renderer + node-pty + OSC 8 vault links",
+  "description": "Agent sidebar terminal for Obsidian — configurable startup commands + libghostty-vt renderer + node-pty + OSC 8 vault links",
   "main": "main.js",
   "scripts": {
     "test:images": "node scripts/test-terminal.mjs kitty-images",

@@ -121,7 +121,7 @@ class GhosttyTerminalView extends ItemView {
   private isSelecting = false;
   private didDragSelect = false;
   private lastSelectCell: Cell | null = null;
-  private sessionTitle = "Claude";
+  private sessionTitle = "Agent";
   private oscTitleBuf = "";
   private oscTitleCapturing = false;
 
@@ -152,12 +152,12 @@ class GhosttyTerminalView extends ItemView {
       event.preventDefault();
       const menu = new Menu();
       menu.addItem((item) =>
-        item.setTitle("New Claude session").setIcon("ghost").onClick(() => {
+        item.setTitle("New Agent session").setIcon("ghost").onClick(() => {
           this.plugin.openNewTerminal(this.leaf).catch(console.error);
         })
       );
       menu.addItem((item) =>
-        item.setTitle("New shell (no Claude)").setIcon("terminal").onClick(() => {
+        item.setTitle("New shell (no Agent)").setIcon("terminal").onClick(() => {
           this.plugin.openNewTerminal(this.leaf, { shellOnly: true }).catch(console.error);
         })
       );
@@ -247,9 +247,7 @@ class GhosttyTerminalView extends ItemView {
       return;
     }
 
-    const shell =
-      process.env.SHELL ||
-      (process.platform === "win32" ? "powershell.exe" : "/bin/zsh");
+    const shell = process.platform === "win32" ? "powershell.exe" : "/bin/bash";
 
     const shellOnly = this.plugin.consumeShellOnlyFlag();
     const cwd = this.plugin.getStartDirectory();
@@ -290,7 +288,7 @@ class GhosttyTerminalView extends ItemView {
       this.scheduleRender();
     });
 
-    // Only a natural shell exit (user ran `exit`, or exited Claude and then the shell)
+    // Only a natural shell exit (user ran `exit`, or exited the agent and then the shell)
     // closes the tab — stopSession() sets intentionallyKilled before pty.kill(), which
     // also fires onExit, so that case is excluded here to avoid detaching an already-
     // closing (or already-replaced) leaf.
@@ -299,8 +297,9 @@ class GhosttyTerminalView extends ItemView {
       this.leaf.detach();
     });
 
-    if (!shellOnly) {
-      this.pty.write("claude --continue\r");
+    const startupCommand = this.plugin.settings.startupCommand.trim();
+    if (!shellOnly && startupCommand) {
+      this.pty.write(`${startupCommand}\r`);
     }
 
     this.bodyEl.tabIndex = 0;
@@ -990,7 +989,7 @@ class GhosttyTerminalView extends ItemView {
   private setSessionTitle(raw: string): void {
     const title = raw.replace(/[\x00-\x1f]/g, "").trim();
     if (!title || title === this.sessionTitle) return;
-    // Prefer Claude-set titles; strip common shell directory prefixes
+    // Use the title supplied by the running terminal application.
     this.sessionTitle = title.length > 40 ? title.slice(0, 38) + "…" : title;
     // Neither is kept in sync with getDisplayText() automatically — each needs its own
     // explicit refresh:
@@ -1917,10 +1916,12 @@ function parseGhosttyConfig(): TerminalFont {
 interface GhosttyPluginSettings {
   // Absolute, "~"-prefixed, or vault-root-relative path. Empty string = vault root.
   startDirectory: string;
+  startupCommand: string;
 }
 
 const DEFAULT_SETTINGS: GhosttyPluginSettings = {
   startDirectory: "",
+  startupCommand: "",
 };
 
 class GhosttySettingTab extends PluginSettingTab {
@@ -1935,8 +1936,7 @@ class GhosttySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Start directory")
       .setDesc(
-        "Working directory new terminals open in — also what `claude --continue` resumes " +
-          "against, since Claude Code's session history is keyed by directory. Absolute path, " +
+        "Working directory new terminals open in. Absolute path, " +
           "\"~\"-prefixed, or relative to the vault root. Leave blank for the vault root."
       )
       .addText((text) =>
@@ -1945,6 +1945,23 @@ class GhosttySettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.startDirectory)
           .onChange(async (value) => {
             this.plugin.settings.startDirectory = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Startup command")
+      .setDesc(
+        "Command or script to run in each new or restored terminal, after starting the shell " +
+          "in the start directory. Leave blank for a shell only. New shell (no Agent) bypasses " +
+          "this command. Changes apply to the next terminal you open."
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("e.g. daneel")
+          .setValue(this.plugin.settings.startupCommand)
+          .onChange(async (value) => {
+            this.plugin.settings.startupCommand = value;
             await this.plugin.saveSettings();
           })
       );
@@ -1966,19 +1983,19 @@ export default class GhosttyPlugin extends Plugin {
       return new GhosttyTerminalView(leaf, this);
     });
 
-    const ribbonIcon = this.addRibbonIcon("ghost", "Open Claude terminal", () => {
+    const ribbonIcon = this.addRibbonIcon("ghost", "Open Agent terminal", () => {
       this.toggleView().catch(console.error);
     });
     ribbonIcon.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       const menu = new Menu();
       menu.addItem((item) =>
-        item.setTitle("New Claude session").setIcon("ghost").onClick(() => {
+        item.setTitle("New Agent session").setIcon("ghost").onClick(() => {
           this.openNewTerminal().catch(console.error);
         })
       );
       menu.addItem((item) =>
-        item.setTitle("New shell (no Claude)").setIcon("terminal").onClick(() => {
+        item.setTitle("New shell (no Agent)").setIcon("terminal").onClick(() => {
           this.openNewTerminal(undefined, { shellOnly: true }).catch(console.error);
         })
       );
@@ -2085,7 +2102,7 @@ export default class GhosttyPlugin extends Plugin {
 
   /** One-shot flag consumed by GhosttyTerminalView.startSession() when a fresh session
    * spawns; always false for leaves Obsidian restores from a saved workspace layout, so
-   * restored terminals default to `claude --continue`. */
+   * restored terminals run the configured startup command. */
   consumeShellOnlyFlag(): boolean {
     const flag = this.pendingShellOnly;
     this.pendingShellOnly = false;

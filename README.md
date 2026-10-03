@@ -1,6 +1,17 @@
 # obsidianghost
 
-Obsidian plugin that embeds a Claude Code terminal using libghostty-vt (native N-API) + node-pty, with a Canvas renderer and vault-aware OSC 8 hyperlink handling.
+Obsidian plugin that embeds an Agent terminal using libghostty-vt (native N-API) + node-pty, with a Canvas renderer and vault-aware OSC 8 hyperlink handling.
+
+## Terminal Settings
+
+In **Settings → Community plugins → Agent Ghostty Terminal**:
+
+- **Start directory**: blank opens terminals at the current vault root. Accepts an absolute path, a `~`-prefixed path, or a vault-relative path.
+- **Startup command**: an optional shell command or script (for example, `daneel`). Runs once in each new or restored terminal, in the start directory. Blank starts only the shell; there is no built-in agent command.
+
+On macOS/Linux, terminals start Bash. Right-click the ghost ribbon icon or the terminal's **+** button and choose **New shell (no Agent)** to bypass the startup command. Settings changes affect subsequent terminals, not running sessions. Installations shared between vaults via symlinks also share their settings.
+
+The existing plugin ID, `obsidian-claude-ghostty`, is retained so saved layouts, enabled-plugin entries, and hotkeys keep working.
 
 ## Inline Images
 

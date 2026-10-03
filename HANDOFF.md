@@ -84,7 +84,15 @@ Text-rendering follow-ups from the Obsidian/Ghostty screenshot comparison:
 - [x] Compare baseline, line spacing, glyph sharpness, and box-drawing alignment
   at Retina DPR; make a side-by-side fixture for typography regression checks.
 
-The remaining sections are historical notes as of 2026-08-06; old cell/font APIs and claimed typography parity are superseded by the updates above.
+## Update — 2026-09-30
+
+The visible plugin name, default tab title, ribbon tooltip, and session menus now say **Agent**, not Claude. The plugin ID is unchanged for compatibility.
+
+The hard-coded `claude --continue` auto-launch is removed. **Startup command** is configurable and defaults to blank; blank opens only Bash (macOS/Linux) at the current vault root unless **Start directory** overrides it. A configured command runs once for each new or restored terminal. **New shell (no Agent)** skips it. The installed shared configuration uses `daneel`; symlinked vaults share that setting. Existing sessions are not changed by settings edits.
+
+`scripts/tests/startup-command.js` replaces the old Claude-specific startup probe and covers legacy settings defaults, Bash/vault-root fallback, custom command execution, whitespace, shell-only bypass, workspace restoration, start-directory overrides, natural shell exit, live title synchronization, explicit startup errors, and the `daneel` script's dry-run mode. The session-title probe is also provider-independent.
+
+The remaining sections are historical notes as of 2026-08-06; references below to hard-coded auto-continuation, Claude-branded UI, old cell/font APIs, and claimed typography parity are superseded by the updates above.
 
 ## Repository State
 

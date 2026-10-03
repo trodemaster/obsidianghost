@@ -1,0 +1,55 @@
+# Scout per-repo config template.
+#
+# Seeded into `<repo>/.scout/scout.config.yaml` by `scout attach` when the
+# repo has no config yet.  Templates here only carry the repo-specific
+# ignore / dampen / boost / tune overrides; defaults for
+# repository/markdown/ranking/index/projects are filled in at load time.
+ignore:
+  # --- derived from .gitignore at attach; edit or remove freely (not regenerated) ---
+  - 'node_modules/**'
+  - 'node_modules/.install-stamp'
+  - '.env'
+  - '.envrc'
+  - '.context/**'
+  - 'build/**'
+  - 'dist/**'
+  - 'coverage/**'
+  - 'main.js'
+  - 'native/ghostty_vt.node'
+  - 'native/ghostty_vt/zig-out/'
+  - 'native/ghostty_vt/zig/zig-out/'
+  - 'native/ghostty_vt/zig/zig-pkg/'
+  - 'native/ghostty_vt/zig/.zig-cache/'
+  - 'vendor/zig/*/zig'
+  - 'vendor/zig/*/doc'
+  - '.cache/**'
+  - '.zig-cache/**'
+  - '.zig-shim/**'
+  - '.eslintcache'
+  - '*.tsbuildinfo'
+  - '*.log'
+  - '**/npm-debug.log*'
+  - '**/yarn-debug.log*'
+  - '**/yarn-error.log*'
+  - '**/pnpm-debug.log*'
+  - '.DS_Store'
+  - '.idea/'
+  - '.vscode/'
+  - '**/CHANGELOG.md'
+  - '**/CHANGELOG*'
+  - '**/CHANGES.md'
+  - '**/HISTORY.md'
+
+dampen:
+  - factor: 0.3
+    patterns:
+      - '**/package.json'
+
+boost:
+  - factor: 1.2
+    patterns:
+      - 'main.ts'
+      - 'native/ghostty.ts'
+      - 'native/ghostty_vt.cc'
+      - 'native/ghostty_vt/include/ghostty_vt.h'
+      - 'native/ghostty_vt/zig/lib.zig'
