@@ -247,7 +247,7 @@ class GhosttyTerminalView extends ItemView {
       return;
     }
 
-    const shell = process.platform === "win32" ? "powershell.exe" : "/bin/bash";
+    const shell = resolveShell(this.plugin.settings.shell);
 
     const shellOnly = this.plugin.consumeShellOnlyFlag();
     const cwd = this.plugin.getStartDirectory();
@@ -1917,12 +1917,29 @@ interface GhosttyPluginSettings {
   // Absolute, "~"-prefixed, or vault-root-relative path. Empty string = vault root.
   startDirectory: string;
   startupCommand: string;
+  // Absolute or "~"-prefixed path to the shell. Empty string = auto-detect (see resolveShell).
+  shell: string;
 }
 
 const DEFAULT_SETTINGS: GhosttyPluginSettings = {
   startDirectory: "",
   startupCommand: "",
+  shell: "",
 };
+
+// MacPorts bash 5 when installed; /bin/bash on macOS is bash 3.2.
+const PREFERRED_SHELLS = ["/opt/local/bin/bash", "/bin/bash"];
+
+function resolveShell(configured: string): string {
+  if (process.platform === "win32") return "powershell.exe";
+  const custom = configured.trim();
+  if (custom) {
+    const path = custom.startsWith("~") ? join(homedir(), custom.slice(1)) : custom;
+    if (existsSync(path)) return path;
+    console.warn(`Configured shell not found: ${path}; falling back to auto-detect`);
+  }
+  return PREFERRED_SHELLS.find((candidate) => existsSync(candidate)) ?? "/bin/bash";
+}
 
 class GhosttySettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: GhosttyPlugin) {
@@ -1945,6 +1962,22 @@ class GhosttySettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.startDirectory)
           .onChange(async (value) => {
             this.plugin.settings.startDirectory = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Shell")
+      .setDesc(
+        "Shell to start in new terminals. Absolute or \"~\"-prefixed path. Leave blank to use " +
+          "MacPorts bash (/opt/local/bin/bash) when installed, otherwise /bin/bash."
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("/opt/local/bin/bash")
+          .setValue(this.plugin.settings.shell)
+          .onChange(async (value) => {
+            this.plugin.settings.shell = value;
             await this.plugin.saveSettings();
           })
       );

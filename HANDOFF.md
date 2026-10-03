@@ -30,7 +30,7 @@ Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghost
 
 [README.md](README.md) has the user-facing features and settings. Implementation notes:
 
-- **Startup**: **Start directory** and **Startup command** are settings. Blank command = plain Bash at the vault root. There is no built-in agent command. Right-click the ghost ribbon icon, or use **+**, for "New shell (no Agent)". The plugin ID stays `obsidian-claude-ghostty`.
+- **Startup**: **Start directory** and **Startup command** are settings. Blank command = plain shell at the vault root. **Shell** setting is blank by default and resolves to `/opt/local/bin/bash` (MacPorts bash 5) if present, else `/bin/bash`. There is no built-in agent command. Right-click the ghost ribbon icon, or use **+**, for "New shell (no Agent)". The plugin ID stays `obsidian-claude-ghostty`.
 - **Links**: Cmd/Ctrl+click opens OSC 8 links (`vt.hyperlinkAt`) and plain-text URLs (regex over row text). The modifier is required on the click itself.
 - **Selection and input**: mouse drag selects cells and copies through Electron's `clipboard`. Dropped files insert shell-quoted paths via `webUtils.getPathForFile`. Shift+Enter sends ESC+CR. The shell is identified as Ghostty (`TERM_PROGRAM=ghostty`, pty name `xterm-ghostty`).
 - **Titles**: the tab label and header follow the agent's OSC 0/2 title. Both need undocumented Obsidian API (`leaf.updateHeader()`, `view.titleEl`), reached through casts.
