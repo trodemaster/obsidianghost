@@ -58,7 +58,8 @@ try {
   })()`;
   const { stdout, stderr } = await promisify(execFile)(
     "/Applications/Obsidian.app/Contents/MacOS/obsidian-cli",
-    ["eval", `vault=${process.argv[3] || "daneel"}`, `code=${code}`],
+    // vault= must come before the command; after it the CLI silently uses the focused vault.
+    [`vault=${process.argv[3] || "daneel"}`, "eval", `code=${code}`],
     { timeout: 60000, maxBuffer: 1024 * 1024 },
   );
   const marker = stdout.lastIndexOf("=> ");
