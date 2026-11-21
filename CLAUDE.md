@@ -4,6 +4,7 @@ Obsidian plugin that embeds an agent terminal (Claude Code, Copilot CLI, or any 
 
 - [README.md](README.md): install, settings, usage, and how the plugin works (user-facing; development, testing and release details live here instead)
 - [IMPLEMENTATION.md](IMPLEMENTATION.md): architecture, engine adapter, design notes, and findings/backlog
+- [INSTALL.md](INSTALL.md): agent-run install/upgrade/uninstall guide, with skill frontmatter (`install-obsidianghost`). Steps 3–4 were run verbatim on 2026-11-21 (fresh install and upgrade into a scratch folder, `verify-payload` pass) and steps 7 and 9 read-only in `orac`. Keep it in step with the payload layout, `native/libghostty-vt.env` and the settings API (`setAgentCommand`, `setFontSize`, `getNativeState`).
 - [CHANGELOG.md](CHANGELOG.md): release notes (the release workflow publishes the matching section)
 
 This file holds the working state: conventions, toolchain, behavior notes, testing, and next steps. Keep it current. There is no separate handoff document.
