@@ -32,7 +32,7 @@ make setup-vaults
 
 ## CI and releases
 
-`.github/workflows/ci.yml` runs on the self-hosted macOS runners (label from the `OBSIDIANGHOST_RUNNER` repository variable, default `macOS_27`): `make check`, `make test`, `make verify` on every push and PR, and for a `v*` tag `make release-zip` plus `gh release create` (0.x marked pre-release). GitHub registers self-hosted runners per repository for personal accounts, so a runner must be registered to `trodemaster/obsidianghost` (ghrunnerd currently registers them for blakeports only).
+`.github/workflows/ci.yml` runs on the self-hosted macOS runners (label from the `OBSIDIANGHOST_RUNNER` repository variable, default `macOS_27`): `make check`, `make test`, `make verify` on every push and PR, and for a `v*` tag `make release-zip` plus `gh release create` (0.x marked pre-release). GitHub registers self-hosted runners per repository for personal accounts, and ghrunnerd registers its runners to blakeports, so this repo uses an on-demand runner: `scripts/ci-runner.sh up` starts the `macos-27` Lima VM on far-star if needed (via `ghrunnerd vm-start`) and runs a second, separate agent in it (`~/actions-runner-obsidianghost`, copied from the VM's `/opt/actions-runner`), registered as `macOS_27-obsidianghost` with the `macOS_27` label; `--once` makes it ephemeral (one job). `scripts/ci-runner.sh down` deregisters it and powers the VM off only if `up` powered it on and the blakeports `macOS_27` runner is idle. `status` shows all three. Queued jobs wait (up to a day) until the runner is up. Sandbox off; `ghrunnerd exec` takes its flags before the VM id. First green run: PR #2, `test` in 55 s.
 
 ## Install layout
 

@@ -117,7 +117,7 @@ For a measured Ghostty comparison, run the same fixture in Ghostty:
 
 ### Releases
 
-Versions follow semver; 0.x releases are betas. To release, bump `version` in `manifest.json` and `package.json`, add a `versions.json` entry and a `CHANGELOG.md` section, merge to `main`, then push a tag `v<version>`. The CI workflow (`.github/workflows/ci.yml`) runs on the self-hosted macOS runners: it tests every push and pull request, and for a tag it builds the zip and publishes a GitHub release (0.x is marked pre-release).
+Versions follow semver; 0.x releases are betas. To release, bump `version` in `manifest.json` and `package.json`, add a `versions.json` entry and a `CHANGELOG.md` section, merge to `main`, then push a tag `v<version>`. The CI workflow (`.github/workflows/ci.yml`) runs on a self-hosted macOS runner that is registered only when needed: `scripts/ci-runner.sh up` before pushing (or while jobs are queued), `scripts/ci-runner.sh down` afterwards. It tests every push and pull request, and for a tag it builds the zip and publishes a GitHub release (0.x is marked pre-release).
 
 To update libghostty-vt, change the three values in `native/libghostty-vt.env` (the hash comes from the release's `SHA256SUMS`), run `make test`, and update `THIRD_PARTY_NOTICES.md` if the release's `deps/libghostty-vt-third-party.json` changed.
 
