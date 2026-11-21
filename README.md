@@ -29,7 +29,7 @@ make install
 make setup-vaults
 ```
 
-- `make install` installs npm dependencies, fetches `ghostty-vt.wasm`, bundles `main.js`, assembles the payload in `dist/obsidian-claude-ghostty/`, and syncs it into the central plugin directory, `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Override it with `make install PLUGIN_DIR=/path`. The sync never touches `data.json`, so settings survive.
+- `make install` installs npm dependencies, fetches `ghostty-vt.wasm`, bundles `main.js`, assembles the payload in `dist/obsidian-claude-ghostty/`, and syncs it into the central plugin directory, `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Override it with `make install PLUGIN_DIR=/path`. The sync never touches `data.json`, the plugin's saved settings, so they survive updates. `data.json` is not part of the payload or of machine-cfg (which ignores it), so each computer keeps its own settings.
 - Without a checkout's build, `make install-release TAG=v0.9.0` installs a published GitHub release zip instead (needs `gh` signed in to an account that can read the repo).
 - `make setup-vaults` symlinks that directory into `<vault>/.obsidian/plugins/obsidian-claude-ghostty` for each vault in `VAULTS` (default `~/orac` and `~/daneel`; override with `make setup-vaults VAULTS="..."`). It is idempotent and skips missing vaults.
 - Optionally run `make setup-themes` to link the Nocturnal Winter theme, then select it once in **Settings → Appearance**.
@@ -63,7 +63,7 @@ In **Settings → Community plugins → Agent Ghostty Terminal**:
 - **Start directory**: blank opens terminals at the vault root. Accepts an absolute path, a `~`-prefixed path, or a vault-relative path.
 - **Shell**: path to the shell to start. Blank auto-detects MacPorts bash (`/opt/local/bin/bash`) when installed, otherwise `/bin/bash` (macOS's bash 3.2).
 - **Font size**: terminal font size in pixels, per computer like the agent command. Blank uses `font-size` from the Ghostty config. Changes apply to open terminals immediately.
-- **Agent start command**: the command that starts your agent, run once in each new or restored terminal in the start directory, for example `claude --continue`. It is stored **per computer** (by host name, shown in the setting), so a plugin folder shared between machines — such as one synced through git — can start a different agent or wrapper script on each. Blank starts only the shell; there is no built-in agent command.
+- **Agent start command**: the command that starts your agent, run once in each new or restored terminal in the start directory, for example `claude --continue`. It is stored **per computer** (by host name, shown in the setting), so even a `data.json` copied or synced between machines starts the right agent or wrapper script on each. Blank starts only the shell; there is no built-in agent command.
 
 Terminals start the configured shell. Right-click the ghost ribbon icon or the terminal's **+** button and choose **New shell (no Agent)** to bypass the agent start command. Settings changes affect subsequent terminals, not running sessions. Installations shared between vaults via symlinks also share their settings.
 
