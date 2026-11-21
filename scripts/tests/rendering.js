@@ -25,8 +25,9 @@
     const colors = query.takeResponses();
     checks.colorQueries = colors === "\x1b]11;rgb:0d0d/0d0d/1717\x07\x1b]10;rgb:e6e6/e5e5/e5e5\x1b\\";
     checks.responsesDrained = query.takeResponses() === "";
-    query.feed("\x1b[?2027$p\x1b[?2027h\x1b[?2027$p\x1b[?2027l");
-    checks.graphemeModeNegotiation = query.takeResponses() === "\x1b[?2027;2$y\x1b[?2027;1$y";
+    // On by default, as in Ghostty; programs can still turn it off and back on.
+    query.feed("\x1b[?2027$p\x1b[?2027l\x1b[?2027$p\x1b[?2027h\x1b[?2027$p");
+    checks.graphemeModeNegotiation = query.takeResponses() === "\x1b[?2027;1$y\x1b[?2027;2$y\x1b[?2027;1$y";
     query.feed("中\x1b[6nZ");
     checks.cursorQueryBeforeLaterOutput = query.takeResponses() === "\x1b[1;3R";
     query.feed("\x1b[2J\x1b[H\x1b[4;33mX\x1b[0mY");

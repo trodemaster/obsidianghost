@@ -35,8 +35,9 @@ try {
     for (const ch of "\x1b]11;?\x07\x1b]10;?\x1b\\") t.feed(ch);
     checks.colorQueries = t.takeResponses() === "\x1b]11;rgb:0d0d/0d0d/1717\x07\x1b]10;rgb:e6e6/e5e5/e5e5\x1b\\";
     checks.responsesDrained = t.takeResponses() === "";
-    t.feed("\x1b[?2027$p\x1b[?2027h\x1b[?2027$p\x1b[?2027l");
-    checks.graphemeModeNegotiation = t.takeResponses() === "\x1b[?2027;2$y\x1b[?2027;1$y";
+    // On by default, as in Ghostty; programs can still turn it off and back on.
+    t.feed("\x1b[?2027$p\x1b[?2027l\x1b[?2027$p\x1b[?2027h\x1b[?2027$p");
+    checks.graphemeModeNegotiation = t.takeResponses() === "\x1b[?2027;1$y\x1b[?2027;2$y\x1b[?2027;1$y";
     t.feed("中\x1b[6nZ");
     checks.cursorQueryBeforeLaterOutput = t.takeResponses() === "\x1b[1;3R";
     t.feed("\x1b[c");
@@ -104,6 +105,20 @@ try {
     t.feed("\x1b[2J\x1b[H\u{10eeee}̅̅");
     checks.keepsDiacritics = t.dumpViewportRowCells(0)[0] === "\u{10eeee}̅̅";
     checks.resize = t.resize(6, 2, 22, 45) === 0 && t.dumpViewportRowCells(0).length === 6;
+  } finally {
+    t.free();
+  }
+
+  t = native.createTerminal(20, 3);
+  try {
+    // Grapheme clustering without the program asking for it (Claude Code never sends
+    // 2027h), and still after a full reset (RIS).
+    for (const reset of ["", "\x1bc"]) {
+      t.feed(reset + "\x1b[2J\x1b[H👩‍💻|🇺🇸|👍🏽|e\u0301|");
+      const c = t.dumpViewportRowCells(0);
+      const ok = c.slice(0, 13).join("\u00b7") === ["👩‍💻", "", "|", "🇺🇸", "", "|", "👍🏽", "", "|", "e\u0301", "|", " ", " "].join("\u00b7");
+      checks[reset ? "graphemeClusterAfterReset" : "graphemeClusterByDefault"] = ok;
+    }
   } finally {
     t.free();
   }

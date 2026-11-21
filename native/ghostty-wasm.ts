@@ -27,6 +27,9 @@ const OPT_COLOR_FOREGROUND = 12;
 const OPT_COLOR_BACKGROUND = 13;
 const OPT_COLOR_PALETTE = 15;
 const OPT_KITTY_IMAGE_STORAGE_LIMIT = 16;
+const OPT_MODE_DEFAULT = 34;
+// GhosttyMode packs the number with bit 15 set for ANSI modes; DEC private modes leave it clear.
+const MODE_GRAPHEME_CLUSTER = 2027;
 
 // GhosttyTerminalData
 const DATA_SCROLLBAR = 9;
@@ -271,6 +274,17 @@ class WasmTerminal implements GhosttyTerminal {
     // so the library must not also store images or answer the same commands.
     w.dv.setBigUint64(w.scratch + S_VALUE, 0n, true);
     e.ghostty_terminal_set(this.handle, OPT_KITTY_IMAGE_STORAGE_LIMIT, w.scratch + S_VALUE);
+    // Ghostty turns grapheme clustering (DEC mode 2027) on by default
+    // (grapheme-width-method = unicode), and programs that see TERM_PROGRAM=ghostty
+    // size emoji sequences that way. With it off, ZWJ sequences, flags and skin-tone
+    // modifiers split into several cells and parts get overwritten. Set as the reset
+    // default so RIS keeps it; programs can still turn it off.
+    const mode = w.scratch + S_STRUCT; // GhosttyTerminalModeConfig { uint16 mode; bool value; }
+    w.dv.setUint16(mode, MODE_GRAPHEME_CLUSTER, true);
+    w.u8[mode + 2] = 1;
+    if (e.ghostty_terminal_set(this.handle, OPT_MODE_DEFAULT, mode) !== 0) {
+      throw new Error("libghostty-vt rejected grapheme clustering as a default mode");
+    }
   }
 
   receiveReply(bytes: Uint8Array): void {

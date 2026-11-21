@@ -24,6 +24,9 @@ with a stable C ABI.
   the terminal's default palette, so OSC 104 resets to it.
 - The caret follows the cursor visibility the program sets (DECTCEM), as in
   Ghostty.
+- Grapheme clustering (DEC mode 2027) is on by default, as in Ghostty. Emoji
+  sequences such as 👩‍💻, 🇺🇸 and 👍🏽 now take one wide cell in Claude Code instead
+  of splitting and losing parts.
 - New installs and updates no longer need an Obsidian restart for a new engine:
   reloading the plugin is enough.
 

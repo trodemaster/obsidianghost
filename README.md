@@ -86,7 +86,7 @@ The image cache is limited to 64 MiB of decoded pixels per terminal. Unsupported
 
 ### Text Rendering
 
-Applications can negotiate grapheme clustering through DEC mode 2027; it is not enabled globally. Shells receive `COLORTERM=truecolor`, and libghostty-vt answers color, cursor, mode and device-attribute queries so applications can choose their correct theme and backgrounds. The caret follows the program's cursor visibility (DECTCEM), as in Ghostty.
+Grapheme clustering (DEC mode 2027) is on by default, as in Ghostty, so emoji sequences such as 👩‍💻, 🇺🇸 and 👍🏽 take one wide cell; programs can still turn it off. Shells receive `COLORTERM=truecolor`, and libghostty-vt answers color, cursor, mode and device-attribute queries so applications can choose their correct theme and backgrounds. The caret follows the program's cursor visibility (DECTCEM), as in Ghostty.
 
 Installed TTF/OTF fonts resolve by family metadata or legacy filename stem. Regular, bold, italic, and bold-italic faces load separately; unavailable faces produce warnings and use browser fallback/synthesis. Cell pitch and baseline use font-table metrics rounded to physical pixels, with Canvas metrics as an explicit fallback. Backgrounds are painted before text, and common light/heavy box lines are drawn on the device-pixel grid. Canvas and native Ghostty rasterization are not bit-identical.
 
