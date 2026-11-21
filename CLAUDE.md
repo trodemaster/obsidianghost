@@ -53,6 +53,7 @@ Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghost
 - `make test` (`npm run test:vt`): headless adapter checks in plain Node against `native/ghostty-vt.wasm`. `make verify` also packages and checks the payload, including a node-pty spawn (that spawn needs the Claude sandbox disabled; it blocks pty creation).
 - Enable Obsidian's CLI for the live probes (Settings → General → Advanced → Command line interface). It talks over a unix socket, so from a sandboxed Claude session these commands need the sandbox disabled.
 - `npm run test:images -- <vault>` and `npm run test:rendering -- <vault>` run isolated probes against a running Obsidian without reloading existing tabs. Set `GHOSTTY_METRICS_FILE` to compare against a real Ghostty measurement (see the README).
+- `scripts/obsidian-ui.sh` (repo skill `obsidian-ui`): drives the real app through AppleScript/System Events — opens a throwaway shell-only tab, types real keystrokes into it (refusing if anything else has focus), pastes Unicode, captures the bytes sent to the pty, reads the screen and screenshots the window. Sandbox off; needs Accessibility and Screen Recording.
 - `scripts/live-test.sh <probe.js> [vault]` rebuilds, hot-reloads the plugin, opens a shell-only terminal, and evals a probe from `scripts/tests/`. Reloading the plugin ends embedded terminal sessions.
 
 Status on 2026-11-21 (branch `libghostty-1.0`, v0.9.0, libghostty-vt 1.0.1 wasm, macOS 27.2):
