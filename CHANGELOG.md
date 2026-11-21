@@ -30,6 +30,10 @@ with a stable C ABI.
 
 ### Added
 
+- **Agent start command** setting, stored per computer (by host name), so one
+  plugin folder shared between machines can start a different agent or wrapper
+  on each. It replaces **Startup command**; an existing value becomes this
+  computer's command.
 - `make test`: headless adapter tests that run in plain Node.
 - `make verify`, `make release-zip` and `make install-release TAG=…`, plus a CI
   workflow for the self-hosted macOS runners that publishes tagged releases.

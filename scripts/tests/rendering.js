@@ -53,7 +53,7 @@
     view.contentEl.empty();
     Object.setPrototypeOf(view, GhosttyTerminalView.prototype);
     const testPlugin = Object.create(plugin);
-    testPlugin.settings = { ...plugin.settings, startupCommand: "" };
+    testPlugin.settings = { ...plugin.settings, agentCommands: {} };
     testPlugin.consumeShellOnlyFlag = () => true;
     testPlugin.terminalFont = font;
     view.plugin = testPlugin;

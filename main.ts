@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "fs";
-import { homedir } from "os";
+import { homedir, hostname } from "os";
 import { dirname, isAbsolute, join, normalize as normalizeFsPath, relative } from "path";
 import {
   App,
@@ -296,9 +296,9 @@ class GhosttyTerminalView extends ItemView {
       this.leaf.detach();
     });
 
-    const startupCommand = this.plugin.settings.startupCommand.trim();
-    if (!shellOnly && startupCommand) {
-      this.pty.write(`${startupCommand}\r`);
+    const agentCommand = this.plugin.agentCommand();
+    if (!shellOnly && agentCommand) {
+      this.pty.write(`${agentCommand}\r`);
     }
 
     this.bodyEl.tabIndex = 0;
@@ -1913,16 +1913,23 @@ function parseGhosttyConfig(): TerminalFont {
 interface GhosttyPluginSettings {
   // Absolute, "~"-prefixed, or vault-root-relative path. Empty string = vault root.
   startDirectory: string;
-  startupCommand: string;
   // Absolute or "~"-prefixed path to the shell. Empty string = auto-detect (see resolveShell).
   shell: string;
+  // Agent start command per computer (key: computerName()). data.json lives in the plugin
+  // folder, which can be shared between machines (machine-cfg), so each machine keeps its own.
+  agentCommands: Record<string, string>;
 }
 
 const DEFAULT_SETTINGS: GhosttyPluginSettings = {
   startDirectory: "",
-  startupCommand: "",
   shell: "",
+  agentCommands: {},
 };
+
+// Short, case-normalized host name: "Far-Star.local" and "far-star" are the same computer.
+function computerName(): string {
+  return hostname().split(".")[0].toLowerCase() || "default";
+}
 
 // MacPorts bash 5 when installed; /bin/bash on macOS is bash 3.2.
 const PREFERRED_SHELLS = ["/opt/local/bin/bash", "/bin/bash"];
@@ -1979,20 +1986,26 @@ class GhosttySettingTab extends PluginSettingTab {
           })
       );
 
+    const computer = computerName();
+    const others = Object.keys(this.plugin.settings.agentCommands)
+      .filter((name) => name !== computer)
+      .sort();
     new Setting(containerEl)
-      .setName("Startup command")
+      .setName("Agent start command")
       .setDesc(
-        "Command or script to run in each new or restored terminal, after starting the shell " +
-          "in the start directory. Leave blank for a shell only. New shell (no Agent) bypasses " +
-          "this command. Changes apply to the next terminal you open."
+        `Command that starts the agent in each new or restored terminal on this computer ` +
+          `(${computer}), run after the shell starts in the start directory, for example ` +
+          `"claude --continue". Each computer keeps its own value, so a plugin folder shared ` +
+          `between machines can start a different agent on each. Leave blank for a shell only. ` +
+          `New shell (no Agent) skips it. Changes apply to the next terminal you open.` +
+          (others.length ? ` Also set on: ${others.join(", ")}.` : "")
       )
       .addText((text) =>
         text
-          .setPlaceholder("e.g. daneel")
-          .setValue(this.plugin.settings.startupCommand)
+          .setPlaceholder("claude --continue")
+          .setValue(this.plugin.agentCommand())
           .onChange(async (value) => {
-            this.plugin.settings.startupCommand = value;
-            await this.plugin.saveSettings();
+            await this.plugin.setAgentCommand(value);
           })
       );
   }
@@ -2153,7 +2166,37 @@ export default class GhosttyPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = (await this.loadData()) ?? {};
+    const { startupCommand: legacy, ...rest } = data as Partial<GhosttyPluginSettings> & {
+      startupCommand?: string;
+    };
+    this.settings = {
+      ...DEFAULT_SETTINGS,
+      ...rest,
+      agentCommands: { ...(rest.agentCommands ?? {}) },
+    };
+    // Before 0.9.0 one "Startup command" applied to every computer. Keep it as this
+    // computer's command; other computers set their own.
+    if (legacy !== undefined) {
+      const computer = computerName();
+      if (legacy.trim() && !(computer in this.settings.agentCommands)) {
+        this.settings.agentCommands[computer] = legacy.trim();
+      }
+      await this.saveSettings();
+    }
+  }
+
+  // The agent start command for this computer ("" = shell only).
+  agentCommand(): string {
+    return (this.settings.agentCommands[computerName()] ?? "").trim();
+  }
+
+  async setAgentCommand(value: string): Promise<void> {
+    const computer = computerName();
+    const command = value.trim();
+    if (command) this.settings.agentCommands[computer] = command;
+    else delete this.settings.agentCommands[computer];
+    await this.saveSettings();
   }
 
   async saveSettings(): Promise<void> {
