@@ -32,9 +32,9 @@ with a stable C ABI.
 
 - **Font size** setting, per computer, applied to open terminals immediately.
   Blank keeps using `font-size` from the Ghostty config.
-- **Agent start command** setting, stored per computer (by host name), so one
-  plugin folder shared between machines can start a different agent or wrapper
-  on each. It replaces **Startup command**; an existing value becomes this
+- **Agent start command** setting, stored per computer (by host name), so a
+  `data.json` copied or synced between machines still starts the right agent or
+  wrapper on each. It replaces **Startup command**; an existing value becomes this
   computer's command.
 - `make test`: headless adapter tests that run in plain Node.
 - `make verify`, `make release-zip` and `make install-release TAG=…`, plus a CI

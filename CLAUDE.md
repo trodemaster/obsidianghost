@@ -2,7 +2,7 @@
 
 Obsidian plugin that embeds an agent terminal (Claude Code, Copilot CLI, or any shell command) using libghostty-vt 1.0 (official WebAssembly build) + node-pty, with a Canvas renderer, inline Kitty images, and vault-aware OSC 8 hyperlink handling.
 
-- [README.md](README.md): install, settings, and user-facing features
+- [README.md](README.md): install, settings, usage, and how the plugin works (user-facing; development, testing and release details live here instead)
 - [IMPLEMENTATION.md](IMPLEMENTATION.md): architecture, engine adapter, design notes, and findings/backlog
 - [CHANGELOG.md](CHANGELOG.md): release notes (the release workflow publishes the matching section)
 
@@ -27,7 +27,7 @@ make setup-vaults
 - **libghostty-vt**: the official 1.0.1 WebAssembly release, pinned (version, URL, SHA-256) in `native/libghostty-vt.env`. `make wasm` downloads and verifies it into `native/ghostty-vt.wasm` (gitignored). No Zig, no vendored Ghostty, no C/C++ build. Building it from source would need Zig 0.17 (MacPorts `zig-0.17`), but nothing here does.
 - **node-pty**: pinned to 1.1.0 and used through its shipped N-API prebuild; `npm ci --ignore-scripts` skips its node-gyp install script. npm drops the execute bit on `spawn-helper`; `scripts/package.sh` restores it (without it every spawn fails with `posix_spawnp failed`).
 - **npm**: MacPorts installs and `sudo npm` leave `~/.npm` root-owned. Never chown it. The Makefile points npm at a repo-local cache (`.cache/npm`).
-- **Versions**: semver, 0.x are betas. `manifest.json`, `package.json`, `versions.json` and `CHANGELOG.md` move together; `scripts/package.sh` refuses mismatched versions and the release job refuses a tag that differs from `manifest.json`.
+- **Versions**: semver, 0.x are betas. To release: bump `manifest.json` and `package.json`, add the `versions.json` entry and the `CHANGELOG.md` section, merge to `main`, run `scripts/ci-runner.sh up`, push tag `v<version>`, then `scripts/ci-runner.sh down`. `manifest.json`, `package.json`, `versions.json` and `CHANGELOG.md` move together; `scripts/package.sh` refuses mismatched versions and the release job refuses a tag that differs from `manifest.json`.
 - Make targets: `make help` lists them. `make reinstall` is the fast JS loop; `make test` and `make verify` run without Obsidian.
 
 ## CI and releases
@@ -36,11 +36,11 @@ make setup-vaults
 
 ## Install layout
 
-Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Each vault symlinks to it (`make setup-vaults`). That directory is tracked in machine-cfg, so commit and push it from the terminal after `make install`. Since 0.9.0 the payload is about 1.5 MB (no node-pty sources or build output); `make install` removes the old `native/` directory there, so commit that deletion too. `make install-release TAG=…` installs a release zip instead of a local build (for example on the work machine, whose machine-cfg has a different upstream).
+Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Each vault symlinks to it (`make setup-vaults`). That directory is tracked in machine-cfg, so commit and push it from the terminal after `make install`. Since 0.9.0 the payload is about 1.5 MB (no node-pty sources or build output); `make install` removes the old `native/` directory there, so commit that deletion too. `make install-release TAG=…` installs a release zip instead of a local build (for example on the work machine, whose machine-cfg has a different upstream). The plugin's settings file, `data.json`, is gitignored in machine-cfg (`obsisian/plugins/*/data.json`) and stays unique to each host: never commit it.
 
 ## Behavior notes
 
-- **Startup**: **Start directory**, **Shell**, and **Agent start command** are settings. The agent command is stored per computer in `data.json` (`agentCommands`, keyed by the short lowercase host name), because the plugin folder and its `data.json` can be shared between machines through machine-cfg; a pre-0.9 `startupCommand` migrates to the first computer that loads it. Blank Shell resolves to `/opt/local/bin/bash` (MacPorts bash 5) if present, else `/bin/bash`. Blank agent command = plain shell at the vault root; there is no built-in agent command (set `claude --continue` for Claude Code). Right-click the ghost ribbon icon, or use **+**, for "New shell (no Agent)". The plugin ID stays `obsidian-claude-ghostty`.
+- **Startup**: **Start directory**, **Shell**, and **Agent start command** are settings. The agent command is stored per computer in `data.json` (`agentCommands`, keyed by the short lowercase host name). `data.json` stays local to each host (machine-cfg ignores it); the host keys only make a copied or synced file safe. A pre-0.9 `startupCommand` migrates to the first computer that loads it. Blank Shell resolves to `/opt/local/bin/bash` (MacPorts bash 5) if present, else `/bin/bash`. Blank agent command = plain shell at the vault root; there is no built-in agent command (set `claude --continue` for Claude Code). Right-click the ghost ribbon icon, or use **+**, for "New shell (no Agent)". The plugin ID stays `obsidian-claude-ghostty`.
 - **Links**: Cmd/Ctrl+click opens OSC 8 links (`vt.hyperlinkAt`) and plain-text URLs (regex over row text). The modifier is required on the click itself.
 - **Selection and input**: mouse drag selects cells and copies through Electron's `clipboard`. Dropped files insert shell-quoted paths via `webUtils.getPathForFile`. Shift+Enter sends ESC+CR. The shell is identified as Ghostty (`TERM_PROGRAM=ghostty`, pty name `xterm-ghostty`).
 - **Titles**: the tab label and header follow the agent's OSC 0/2 title. Both need undocumented Obsidian API (`leaf.updateHeader()`, `view.titleEl`), reached through casts.
@@ -53,7 +53,7 @@ Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghost
 
 - `make test` (`npm run test:vt`): headless adapter checks in plain Node against `native/ghostty-vt.wasm`. `make verify` also packages and checks the payload, including a node-pty spawn (that spawn needs the Claude sandbox disabled; it blocks pty creation).
 - Enable Obsidian's CLI for the live probes (Settings → General → Advanced → Command line interface). It talks over a unix socket, so from a sandboxed Claude session these commands need the sandbox disabled.
-- `npm run test:images -- <vault>` and `npm run test:rendering -- <vault>` run isolated probes against a running Obsidian without reloading existing tabs. Set `GHOSTTY_METRICS_FILE` to compare against a real Ghostty measurement (see the README).
+- `npm run test:images -- <vault>` and `npm run test:rendering -- <vault>` run isolated probes against a running Obsidian without reloading existing tabs. To compare against real Ghostty, run the fixture there first: `node scripts/rendering-fixture.cjs --measure /tmp/ghostty-cells.json` (press `q` to close), then `GHOSTTY_METRICS_FILE=/tmp/ghostty-cells.json npm run test:rendering -- <vault>`.
 - `scripts/obsidian-ui.sh` (repo skill `obsidian-ui`): drives the real app through AppleScript/System Events — opens a throwaway shell-only tab, types real keystrokes into it (refusing if anything else has focus), pastes Unicode, captures the bytes sent to the pty, reads the screen and screenshots the window. Sandbox off; needs Accessibility and Screen Recording.
 - `scripts/live-test.sh <probe.js> [vault]` rebuilds, hot-reloads the plugin, opens a shell-only terminal, and evals a probe from `scripts/tests/`. Reloading the plugin ends embedded terminal sessions.
 
@@ -68,8 +68,7 @@ Status on 2026-11-21 (branch `libghostty-1.0`, v0.9.0, libghostty-vt 1.0.1 wasm,
 
 ## Known issues and next steps
 
-- Open the PR for `libghostty-1.0`.
-- Register a self-hosted runner to this repo (ghrunnerd) so CI can run; then tag `v0.9.0` after merging.
+- 0.9.0 is released (2026-11-21, pre-release). Before 1.0: real use on the work machine (`make install-release TAG=v0.9.0`, own `data.json`), and any fixes that turns up.
 - Fonts: chezmoi installs the four SauceCodePro Nerd Font Mono faces (dotfiles `run_onchange_darwin.sh.tmpl`) and sets `font-family = SauceCodePro Nerd Font Mono`.
 - Kitty graphics through libghostty-vt (`ghostty_kitty_graphics_*`, render-state placement iterator) would bring cursor-positioned placements (`a=T`, what `timg -pk` emits) and let `kitty-graphics.ts` go. It needs a synchronous PNG decoder installed with `ghostty_sys_set` (see IMPLEMENTATION.md).
 - Selection and key encoding could move to the library too (`ghostty_selection_gesture_*`, `ghostty_key_encoder_*`).
