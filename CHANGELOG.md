@@ -27,8 +27,6 @@ with a stable C ABI.
 - Grapheme clustering (DEC mode 2027) is on by default, as in Ghostty. Emoji
   sequences such as 👩‍💻, 🇺🇸 and 👍🏽 now take one wide cell in Claude Code instead
   of splitting and losing parts.
-- New installs and updates no longer need an Obsidian restart for a new engine:
-  reloading the plugin is enough.
 
 ### Added
 

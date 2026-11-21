@@ -44,7 +44,7 @@ make reinstall           # TypeScript/CSS changes only
 make install             # dependency, libghostty-vt, or packaging changes
 ```
 
-Then reload with `Cmd+P` → "Reload app without saving". The engine is WebAssembly, so a reload picks up a new version too; only a node-pty change needs a full restart. Reloads and restarts end embedded terminal sessions.
+Then quit Obsidian (`Cmd+Q`) and open it again. A plugin or app reload often works too, but a full restart is the reliable way to pick up a new build. Restarting ends embedded terminal sessions.
 
 Upgrading from 0.1.x: `make install` removes the old `native/ghostty_vt.node` from the plugin directory. Restart Obsidian once afterwards so it drops the old addon.
 

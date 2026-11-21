@@ -44,7 +44,7 @@ Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghost
 - **Links**: Cmd/Ctrl+click opens OSC 8 links (`vt.hyperlinkAt`) and plain-text URLs (regex over row text). The modifier is required on the click itself.
 - **Selection and input**: mouse drag selects cells and copies through Electron's `clipboard`. Dropped files insert shell-quoted paths via `webUtils.getPathForFile`. Shift+Enter sends ESC+CR. The shell is identified as Ghostty (`TERM_PROGRAM=ghostty`, pty name `xterm-ghostty`).
 - **Titles**: the tab label and header follow the agent's OSC 0/2 title. Both need undocumented Obsidian API (`leaf.updateHeader()`, `view.titleEl`), reached through casts.
-- **Rendering**: native physical cells with wide characters and whole graphemes. Real regular/bold/italic faces load separately, and metrics come from font tables rounded to device pixels. Block elements and box lines are drawn procedurally. Grapheme clustering (DEC mode 2027) is on by default and survives RIS, matching Ghostty's `grapheme-width-method = unicode`; Claude Code never sends `2027h` but sizes emoji sequences as Ghostty does, so with it off 👩‍💻/🇺🇸/👍🏽 split and lose parts. libghostty-vt answers color, cursor, status, mode and device-attribute queries through its write-pty callback (`takeResponses()`). The caret follows DECTCEM, so programs that hide the cursor (Claude Code draws its own) show no caret, as in Ghostty. The engine is wasm, so a plugin reload loads a new version; no Obsidian restart is needed.
+- **Rendering**: native physical cells with wide characters and whole graphemes. Real regular/bold/italic faces load separately, and metrics come from font tables rounded to device pixels. Block elements and box lines are drawn procedurally. Grapheme clustering (DEC mode 2027) is on by default and survives RIS, matching Ghostty's `grapheme-width-method = unicode`; Claude Code never sends `2027h` but sizes emoji sequences as Ghostty does, so with it off 👩‍💻/🇺🇸/👍🏽 split and lose parts. libghostty-vt answers color, cursor, status, mode and device-attribute queries through its write-pty callback (`takeResponses()`). The caret follows DECTCEM, so programs that hide the cursor (Claude Code draws its own) show no caret, as in Ghostty. After installing a build, quit and restart Obsidian (`Cmd+Q`): reloads have caused problems before, and restarting is the user's call because it ends embedded sessions.
 - **Images**: the library's Kitty graphics are switched off at runtime (image storage limit 0), so it neither stores images nor replies. `kitty-graphics.ts` decodes direct-PNG / Unicode-virtual-placement commands alongside VT parsing, and the canvas paints them from the viewport's placeholder cells. Cursor-positioned placements are not supported (see IMPLEMENTATION.md).
 - **Font standard**: `SauceCodePro Nerd Font Mono` at size 18 gives 22 × 45 physical-pixel cells at DPR 2 in both Ghostty and the plugin. Use a real family name in the Ghostty config, not a font filename.
 
@@ -61,11 +61,12 @@ Status on 2026-11-21 (branch `libghostty-1.0`, v0.9.0, libghostty-vt 1.0.1 wasm,
 - `make test`: pass, 27 of 27. `make verify`: pass (payload complete, packaged wasm passes, packaged node-pty spawns a 91×27 pty).
 - `make check`: tsc and esbuild clean.
 - Live in Obsidian (`orac`, after `make install` and an Obsidian restart): the plugin reports `Loaded libghostty-vt 1.0.1 (wasm)`; `test:rendering` pass, 31 of 31; `test:images` pass, 19 of 19.
-- Not yet checked: a real Claude Code session by eye, and the `scripts/live-test.sh` probes.
+- Claude Code session checked by eye (screenshots): tables, code, CJK, box drawing and the status line render correctly. That check found the grapheme bug (👩‍💻/🇺🇸/👍🏽 split), now fixed and confirmed in `orac` after a restart with `scripts/obsidian-ui.sh`.
+- Not yet run on this branch: the `scripts/live-test.sh` probes.
 
 ## Known issues and next steps
 
-- Try a real Claude Code session on `libghostty-1.0` in Obsidian, then open the PR.
+- Open the PR for `libghostty-1.0`.
 - Register a self-hosted runner to this repo (ghrunnerd) so CI can run; then tag `v0.9.0` after merging.
 - Fonts: chezmoi installs the four SauceCodePro Nerd Font Mono faces (dotfiles `run_onchange_darwin.sh.tmpl`) and sets `font-family = SauceCodePro Nerd Font Mono`.
 - Kitty graphics through libghostty-vt (`ghostty_kitty_graphics_*`, render-state placement iterator) would bring cursor-positioned placements (`a=T`, what `timg -pk` emits) and let `kitty-graphics.ts` go. It needs a synchronous PNG decoder installed with `ghostty_sys_set` (see IMPLEMENTATION.md).

@@ -94,7 +94,7 @@ sync:
 	rsync -a --delete "$(PAYLOAD)/node_modules/node-pty" "$(PLUGIN_DIR)/node_modules/"
 	@# Pre-0.9 installs carried the N-API addon in native/.
 	rm -rf "$(PLUGIN_DIR)/native"
-	@echo "Synced to $(PLUGIN_DIR). Restart Obsidian (or reload the plugin) to pick it up."
+	@echo "Synced to $(PLUGIN_DIR). Quit and restart Obsidian (Cmd+Q) to pick it up."
 
 install-release:
 	rm -rf .cache/release && install -d .cache/release

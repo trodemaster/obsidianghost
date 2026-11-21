@@ -47,7 +47,7 @@ $S close                     # always close the test tab when done
 ## Safety rules
 
 - **Only the test tab receives input.** `open` records its leaf id in the vault window (`globalThis.__ghosttyUiTestLeaf`). Before each `type`, `paste` or `key`, the script refocuses that tab and refuses to send anything unless the vault's window is frontmost, the test tab is the active leaf, and DOM focus is inside it. Never bypass this to type into another terminal: the user's tabs run live agent sessions (for example the `obsidian-session` Claude).
-- Do not reload the plugin or the app (`plugin:reload`, `app:reload`, quitting Obsidian) without the user's go-ahead. It ends every embedded terminal session, including the user's. `info` shows what is running.
+- Never reload the plugin or the app (`plugin:reload`, `app:reload`, "Reload app without saving"). To load a new build, ask the user to quit and restart Obsidian (`Cmd+Q`) and wait until they say it is back; reloads have caused problems, and a restart ends every embedded terminal session, including theirs. `info` shows what is running.
 - `paste` replaces the clipboard for about 0.3 s and restores only its **text**; an image on the clipboard is lost. Prefer `type` and dead keys when the clipboard may matter.
 - Close the test tab at the end, even after a failure.
 
@@ -63,7 +63,7 @@ $S close                     # always close the test tab when done
 
 ```bash
 S=scripts/obsidian-ui.sh
-make reinstall            # then ask the user to reload the plugin, or do it once they agree
+make reinstall            # then ask the user to quit and restart Obsidian, and wait for them
 $S open
 $S capture start; $S key shift+return; $S capture stop     # expect "\u001b\r"
 $S key ctrl+u
