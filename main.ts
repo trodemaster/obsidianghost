@@ -18,13 +18,12 @@ import { readFontMetrics, readFontNames, terminalMetrics, type FontMetrics } fro
 import { KittyGraphics, IMAGE_PLACEHOLDER, decodeImageCell, terminalRowCells, type ImageCell } from "./kitty-graphics";
 import {
   StyleRunFlags,
-  parseDirtyRows,
-  parseStyleRuns,
+  loadGhosttyNative,
   textRangeToCells,
-  tryLoadGhosttyNative,
   type GhosttyNative,
   type GhosttyNativeState,
   type GhosttyTerminal,
+  type StyleRun,
 } from "./native/ghostty";
 
 const VIEW_TYPE_GHOSTTY = "ghostty-terminal-view";
@@ -171,7 +170,7 @@ class GhosttyTerminalView extends ItemView {
     // otherwise Canvas falls back to a generic monospace and caches wrong metrics.
     await this.ensureFontLoaded();
 
-    const nativeState = await Promise.resolve(this.plugin.getNativeState(true));
+    const nativeState = await this.plugin.getNativeState(true);
 
     if (nativeState.native) {
       this.startSession(nativeState.native);
@@ -465,7 +464,7 @@ class GhosttyTerminalView extends ItemView {
     const { rows } = this.viewportSize;
     const dirtyRows = forceFull
       ? this.allViewportRows()
-      : parseDirtyRows(this.vt.takeDirtyViewportRows(rows));
+      : this.vt.takeDirtyViewportRows(rows);
 
     if (forceFull) {
       this.clearCanvas();
@@ -487,7 +486,9 @@ class GhosttyTerminalView extends ItemView {
     const { cols, rows } = this.measureSize();
     const changed = cols !== this.viewportSize.cols || rows !== this.viewportSize.rows;
     this.viewportSize = { cols, rows };
-    this.vt.resize(cols, rows);
+    const { width, height } = this.getCharSize();
+    const dpr = window.devicePixelRatio || 1;
+    this.vt.resize(cols, rows, width * dpr, height * dpr);
     this.pty.resize(cols, rows);
     this.scheduleRender(forceFull || changed);
   }
@@ -627,7 +628,7 @@ class GhosttyTerminalView extends ItemView {
     const rect = this.canvasEl.getBoundingClientRect();
     const y = row * height;
     const cells = this.vt.dumpViewportRowCells(row);
-    const runs = parseStyleRuns(this.vt.dumpViewportRowStyleRuns(row));
+    const runs = this.vt.dumpViewportRowStyleRuns(row);
     const ctx = this.canvasContext;
 
     ctx.fillStyle = this.themeColors.bgCss;
@@ -667,7 +668,7 @@ class GhosttyTerminalView extends ItemView {
     this.drawImageCells(cells, row, runs);
   }
 
-  private drawImageCells(cells: string[], row: number, runs: ReturnType<typeof parseStyleRuns>): void {
+  private drawImageCells(cells: string[], row: number, runs: StyleRun[]): void {
     if (!this.canvasContext || !this.graphics) return;
     const { width, height } = this.getCharSize();
     let previous: ImageCell | undefined;
@@ -1535,12 +1536,8 @@ class GhosttyTerminalView extends ItemView {
   private applyGhosttyPalette(): void {
     if (!this.vt) return;
     const { palette } = this.plugin.terminalColorConfig;
-    if (palette.size === 0) return;
-    let osc = "";
-    for (const [index, color] of palette) {
-      osc += `\x1b]4;${index};#${color.toString(16).padStart(6, "0")}\x07`;
-    }
-    this.vt.feed(osc);
+    // Set as the default palette, so OSC 104 resets to the Ghostty theme.
+    this.vt.setPalette(palette);
   }
 
   private async openHyperlink(uri: string): Promise<void> {
@@ -2163,9 +2160,9 @@ export default class GhosttyPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  getNativeState(refresh = false): GhosttyNativeState {
+  async getNativeState(refresh = false): Promise<GhosttyNativeState> {
     if (refresh || !this.nativeState || !this.nativeState.native) {
-      this.nativeState = tryLoadGhosttyNative(this.resolvePluginDir());
+      this.nativeState = await loadGhosttyNative(this.resolvePluginDir());
     }
     return this.nativeState;
   }

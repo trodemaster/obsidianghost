@@ -1,33 +1,40 @@
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { loadGhosttyVtWasm } from "./ghostty-wasm";
+
+/** File name of the libghostty-vt WebAssembly module, next to main.js. */
+export const GHOSTTY_VT_WASM = "ghostty-vt.wasm";
 
 export type GhosttyNative = {
   version(): string;
-  renderDemo(): string;
   createTerminal(cols: number, rows: number): GhosttyTerminal;
 };
 
+export type CursorPosition = { col: number; row: number; valid: boolean };
+
 export type GhosttyTerminal = {
   feed(data: Uint8Array | string): number;
-  resize(cols: number, rows: number): number;
+  resize(cols: number, rows: number, cellWidthPx?: number, cellHeightPx?: number): number;
   scrollViewport(deltaLines: number): number;
   dumpViewport(): string;
   dumpViewportRow(row: number): string;
   // One string per physical cell; wide-character continuation cells are "".
   dumpViewportRowCells(row: number): string[];
   takeResponses(): string;
-  cursorPosition(): { col: number; row: number; valid: boolean };
-  // Phase 2: rich rendering APIs
-  dumpViewportRowStyleRuns(row: number): Buffer;
-  takeDirtyViewportRows(totalRows: number): Buffer;
+  // 1-based; valid is false when the cursor is hidden or outside the viewport.
+  cursorPosition(): CursorPosition;
+  dumpViewportRowStyleRuns(row: number): StyleRun[];
+  takeDirtyViewportRows(totalRows: number): number[];
   takeViewportScrollDelta(): number;
   hyperlinkAt(col: number, row: number): string | null;
   setDefaultColors(fg: number, bg: number): void;
+  // Palette entries (index → 0xRRGGBB) layered over the built-in 256-color palette.
+  setPalette(entries: Iterable<[number, number]>): void;
   free(): void;
 };
 
-// StyleRun: 12-byte packed struct per IMPLEMENTATION.md
-// uint16 start_col, uint16 end_col, u8 fg_r,fg_g,fg_b, u8 bg_r,bg_g,bg_b, u8 flags, u8 reserved
+// Columns are 1-based and inclusive. Colors are resolved: inverse is already
+// applied and invisible text has fg === bg.
 export type StyleRun = {
   startCol: number;
   endCol: number;
@@ -45,31 +52,6 @@ export const StyleRunFlags = {
   invisible:     0x20,
   strikethrough: 0x40,
 } as const;
-
-export function parseStyleRuns(buf: Buffer): StyleRun[] {
-  const STRIDE = 12;
-  const count = Math.floor(buf.length / STRIDE);
-  const runs: StyleRun[] = [];
-  for (let i = 0; i < count; i++) {
-    const off = i * STRIDE;
-    runs.push({
-      startCol: buf.readUInt16LE(off),
-      endCol:   buf.readUInt16LE(off + 2),
-      fg: (buf[off + 4] << 16) | (buf[off + 5] << 8) | buf[off + 6],
-      bg: (buf[off + 7] << 16) | (buf[off + 8] << 8) | buf[off + 9],
-      flags:    buf[off + 10],
-    });
-  }
-  return runs;
-}
-
-export function parseDirtyRows(buf: Buffer): number[] {
-  const rows: number[] = [];
-  for (let i = 0; i + 1 < buf.length; i += 2) {
-    rows.push(buf.readUInt16LE(i));
-  }
-  return rows;
-}
 
 export function textRangeToCells(cells: string[], start: number, end: number): { startCol: number; endCol: number } | null {
   let offset = 0;
@@ -90,46 +72,27 @@ export type GhosttyNativeState = {
   message: string;
 };
 
-export function tryLoadGhosttyNative(
+export async function loadGhosttyNative(
   pluginDir: string,
   fallbackDir?: string
-): GhosttyNativeState {
+): Promise<GhosttyNativeState> {
   const baseDir = pluginDir || fallbackDir || "";
   if (!baseDir) {
-    return {
-      native: null,
-      message: "Plugin directory is unavailable.",
-    };
+    return { native: null, message: "Plugin directory is unavailable." };
   }
-  const modulePath = join(baseDir, "native", "ghostty_vt.node");
-
+  const modulePath = join(baseDir, GHOSTTY_VT_WASM);
   if (!existsSync(modulePath)) {
     return {
       native: null,
-      message: `Native module not found at ${modulePath}. baseDir=${baseDir}`,
+      message: `libghostty-vt not found at ${modulePath}. Run make install (or make install-release) and reload.`,
     };
   }
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports -- Native .node addon needs runtime require() for dynamic path resolution in Electron
-    const native = require(modulePath) as GhosttyNative;
-    const probe = native.createTerminal(1, 1);
-    try {
-      if (typeof probe.dumpViewportRowCells !== "function" || typeof probe.takeResponses !== "function") {
-        throw new Error("Outdated native addon. Rebuild with make native, sync with make reinstall-runtime, and restart Obsidian.");
-      }
-    } finally {
-      probe.free();
-    }
-    return {
-      native,
-      message: `Native module loaded: ${native.version()}`,
-    };
+    const native = await loadGhosttyVtWasm(readFileSync(modulePath));
+    return { native, message: `Loaded ${native.version()}` };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      native: null,
-      message: `Failed to load native module: ${message}`,
-    };
+    return { native: null, message: `Failed to load libghostty-vt: ${message}` };
   }
 }

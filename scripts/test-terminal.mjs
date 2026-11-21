@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import { execFile } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, unlinkSync, rmdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, unlinkSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,16 +11,17 @@ const test = process.argv[2] || "kitty-images";
 if (!["kitty-images", "rendering"].includes(test)) throw new Error(`Unknown terminal probe: ${test}`);
 const dir = mkdtempSync(join(tmpdir(), "ghostty-terminal-"));
 const bundle = join(dir, "terminal-test.cjs");
-const native = join(dir, "ghostty_vt.node");
+const wasm = join(root, "native", "ghostty-vt.wasm");
+if (!existsSync(wasm)) throw new Error("native/ghostty-vt.wasm is missing; run make wasm");
 try {
-  copyFileSync(join(root, "native", "ghostty_vt.node"), native);
   await build({
     stdin: {
       contents: readFileSync(join(root, "main.ts"), "utf8") +
         '\nexport { GhosttyTerminalView, parseGhosttyConfig };\n' +
         'export { KittyGraphics, terminalRowCells, decodeImageCell } from "./kitty-graphics";\n' +
         'export { readFontMetrics, readFontNames, terminalMetrics } from "./font-metrics";\n' +
-        'export { textRangeToCells, parseStyleRuns } from "./native/ghostty";\n' +
+        'export { textRangeToCells } from "./native/ghostty";\n' +
+        'export { loadGhosttyVtWasm } from "./native/ghostty-wasm";\n' +
         'const fixture = require("./scripts/rendering-fixture.cjs"); export { fixture };',
       resolveDir: root,
       loader: "ts",
@@ -29,7 +30,7 @@ try {
     external: ["obsidian", "node-pty"],
     format: "cjs",
     platform: "node",
-    target: "es2018",
+    target: "es2020",
     outfile: bundle,
   });
   const code = `(async () => {
@@ -46,7 +47,7 @@ try {
       (id) => id === "obsidian" ? obsidian : require(id), module, module.exports
     );
     globalThis.ghosttyImageTestModule = module.exports;
-    module.exports.native = require(${JSON.stringify(native)});
+    module.exports.native = await module.exports.loadGhosttyVtWasm(require("fs").readFileSync(${JSON.stringify(wasm)}));
     module.exports.fixtureMetrics = ${process.env.GHOSTTY_METRICS_FILE
       ? JSON.stringify(JSON.parse(readFileSync(process.env.GHOSTTY_METRICS_FILE, "utf8"))) : "null"};
     try {
@@ -67,6 +68,5 @@ try {
   if (!result.pass) process.exitCode = 1;
 } finally {
   if (existsSync(bundle)) unlinkSync(bundle);
-  if (existsSync(native)) unlinkSync(native);
   rmdirSync(dir);
 }

@@ -1,9 +1,10 @@
 # obsidianghost
 
-Obsidian plugin that embeds an agent terminal (Claude Code, Copilot CLI, or any shell command) using libghostty-vt (native N-API) + node-pty, with a Canvas renderer, inline Kitty images, and vault-aware OSC 8 hyperlink handling.
+Obsidian plugin that embeds an agent terminal (Claude Code, Copilot CLI, or any shell command) using libghostty-vt 1.0 (official WebAssembly build) + node-pty, with a Canvas renderer, inline Kitty images, and vault-aware OSC 8 hyperlink handling.
 
 - [README.md](README.md): install, settings, and user-facing features
-- [IMPLEMENTATION.md](IMPLEMENTATION.md): architecture, native layer, design notes, and findings/backlog
+- [IMPLEMENTATION.md](IMPLEMENTATION.md): architecture, engine adapter, design notes, and findings/backlog
+- [CHANGELOG.md](CHANGELOG.md): release notes (the release workflow publishes the matching section)
 
 This file holds the working state: conventions, toolchain, behavior notes, testing, and next steps. Keep it current. There is no separate handoff document.
 
@@ -17,21 +18,25 @@ This file holds the working state: conventions, toolchain, behavior notes, testi
 ## Toolchain
 
 ```bash
-sudo port install zig-0.16 nodejs22 npm10 python314
+sudo port install nodejs22 npm10
 make doctor      # lists anything missing
-make install     # build everything and sync to the central plugin dir
+make install     # npm ci, fetch wasm, bundle, package, sync to the central plugin dir
 make setup-vaults
 ```
 
-- **Zig**: MacPorts `zig-0.16` (0.16.0). No download and no custom SDK. The old workaround (Zig 0.15.2 + `MacOSX15.4.sdk` + `xcrun` shim + archive repack) is gone: 0.15.2 could not link against the macOS 26/27 SDKs, and 0.16 does.
-- **Ghostty**: `vendor/ghostty` is a snapshot of upstream `main`, pinned in `vendor/ghostty/UPSTREAM`, trimmed to the files the build reads. The latest release (v1.3.1) is the last on Zig 0.15.2; `main` requires Zig ≥ 0.16.0. `vendor/uucode` is pinned to the commit Ghostty `main` uses.
-- **Electron**: read from the installed Obsidian at build time (`ELECTRON_VERSION` overrides it). Both native addons are N-API, so they are ABI-stable across Electron majors; still smoke-test after an Obsidian update.
-- **npm**: MacPorts installs and `sudo npm` leave `~/.npm` root-owned. Never chown it. The Makefile points npm at a repo-local cache (`.cache/npm`), so `~/.npm` is never touched by the build.
-- Make targets: `make help` lists them. `make reinstall` is the fast JS loop. `make install` also rebuilds the native addons.
+- **libghostty-vt**: the official 1.0.1 WebAssembly release, pinned (version, URL, SHA-256) in `native/libghostty-vt.env`. `make wasm` downloads and verifies it into `native/ghostty-vt.wasm` (gitignored). No Zig, no vendored Ghostty, no C/C++ build. Building it from source would need Zig 0.17 (MacPorts `zig-0.17`), but nothing here does.
+- **node-pty**: pinned to 1.1.0 and used through its shipped N-API prebuild; `npm ci --ignore-scripts` skips its node-gyp install script. npm drops the execute bit on `spawn-helper`; `scripts/package.sh` restores it (without it every spawn fails with `posix_spawnp failed`).
+- **npm**: MacPorts installs and `sudo npm` leave `~/.npm` root-owned. Never chown it. The Makefile points npm at a repo-local cache (`.cache/npm`).
+- **Versions**: semver, 0.x are betas. `manifest.json`, `package.json`, `versions.json` and `CHANGELOG.md` move together; `scripts/package.sh` refuses mismatched versions and the release job refuses a tag that differs from `manifest.json`.
+- Make targets: `make help` lists them. `make reinstall` is the fast JS loop; `make test` and `make verify` run without Obsidian.
+
+## CI and releases
+
+`.github/workflows/ci.yml` runs on the self-hosted macOS runners (label from the `OBSIDIANGHOST_RUNNER` repository variable, default `macOS_27`): `make check`, `make test`, `make verify` on every push and PR, and for a `v*` tag `make release-zip` plus `gh release create` (0.x marked pre-release). GitHub registers self-hosted runners per repository for personal accounts, so a runner must be registered to `trodemaster/obsidianghost` (ghrunnerd currently registers them for blakeports only).
 
 ## Install layout
 
-Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Each vault symlinks to it (`make setup-vaults`). That directory is tracked in machine-cfg, so commit and push it from the terminal after `make install`.
+Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Each vault symlinks to it (`make setup-vaults`). That directory is tracked in machine-cfg, so commit and push it from the terminal after `make install`. Since 0.9.0 the payload is about 1.5 MB (no node-pty sources or build output); `make install` removes the old `native/` directory there, so commit that deletion too. `make install-release TAG=…` installs a release zip instead of a local build (for example on the work machine, whose machine-cfg has a different upstream).
 
 ## Behavior notes
 
@@ -39,32 +44,32 @@ Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghost
 - **Links**: Cmd/Ctrl+click opens OSC 8 links (`vt.hyperlinkAt`) and plain-text URLs (regex over row text). The modifier is required on the click itself.
 - **Selection and input**: mouse drag selects cells and copies through Electron's `clipboard`. Dropped files insert shell-quoted paths via `webUtils.getPathForFile`. Shift+Enter sends ESC+CR. The shell is identified as Ghostty (`TERM_PROGRAM=ghostty`, pty name `xterm-ghostty`).
 - **Titles**: the tab label and header follow the agent's OSC 0/2 title. Both need undocumented Obsidian API (`leaf.updateHeader()`, `view.titleEl`), reached through casts.
-- **Rendering**: native physical cells with wide characters and whole graphemes. Real regular/bold/italic faces load separately, and metrics come from font tables rounded to device pixels. Block elements and box lines are drawn procedurally. DEC mode 2027 is negotiated, not forced. The native shim answers color, cursor, status and mode queries. Old addons are rejected with an actionable message, and a new `.node` needs an Obsidian restart because Node can keep the previous addon cached.
-- **Images**: the native build has Kitty graphics disabled (`oniguruma=false`) and its handler drops APC actions. `kitty-graphics.ts` decodes direct-PNG / Unicode-virtual-placement commands alongside VT parsing, and the canvas paints them from the viewport's placeholder cells. Cursor-positioned placements are not supported (see IMPLEMENTATION.md).
+- **Rendering**: native physical cells with wide characters and whole graphemes. Real regular/bold/italic faces load separately, and metrics come from font tables rounded to device pixels. Block elements and box lines are drawn procedurally. DEC mode 2027 is negotiated, not forced. libghostty-vt answers color, cursor, status, mode and device-attribute queries through its write-pty callback (`takeResponses()`). The caret follows DECTCEM, so programs that hide the cursor (Claude Code draws its own) show no caret, as in Ghostty. The engine is wasm, so a plugin reload loads a new version; no Obsidian restart is needed.
+- **Images**: the library's Kitty graphics are switched off at runtime (image storage limit 0), so it neither stores images nor replies. `kitty-graphics.ts` decodes direct-PNG / Unicode-virtual-placement commands alongside VT parsing, and the canvas paints them from the viewport's placeholder cells. Cursor-positioned placements are not supported (see IMPLEMENTATION.md).
 - **Font standard**: `SauceCodePro Nerd Font Mono` at size 18 gives 22 × 45 physical-pixel cells at DPR 2 in both Ghostty and the plugin. Use a real family name in the Ghostty config, not a font filename.
 
 ## Testing
 
-Enable Obsidian's CLI first (Settings → General → Advanced → Command line interface). It talks over a unix socket, so from a sandboxed Claude session these commands need the sandbox disabled.
-
+- `make test` (`npm run test:vt`): headless adapter checks in plain Node against `native/ghostty-vt.wasm`. `make verify` also packages and checks the payload, including a node-pty spawn (that spawn needs the Claude sandbox disabled; it blocks pty creation).
+- Enable Obsidian's CLI for the live probes (Settings → General → Advanced → Command line interface). It talks over a unix socket, so from a sandboxed Claude session these commands need the sandbox disabled.
 - `npm run test:images -- <vault>` and `npm run test:rendering -- <vault>` run isolated probes against a running Obsidian without reloading existing tabs. Set `GHOSTTY_METRICS_FILE` to compare against a real Ghostty measurement (see the README).
 - `scripts/live-test.sh <probe.js> [vault]` rebuilds, hot-reloads the plugin, opens a shell-only terminal, and evals a probe from `scripts/tests/`. Reloading the plugin ends embedded terminal sessions.
 
-Status on 2026-10-03 (modernized build, `orac` vault, macOS 27.0.1, Obsidian Electron 43.3.0):
+Status on 2026-11-21 (branch `libghostty-1.0`, v0.9.0, libghostty-vt 1.0.1 wasm, macOS 27.2):
 
-- `test:images`: pass, 19 of 19.
-- `test:rendering`: pass, 31 of 31, after the bold, italic and bold-italic faces were installed (via chezmoi) and the Ghostty config switched to the family name. This display runs at DPR 1, so the 22 × 45 DPR 2 cell-size reference does not apply here; the `fontBasedBoxStroke` check is DPR-aware.
-- The terminal tab starts `/opt/local/bin/bash` (verified from the process tree).
-- A real Claude Code session runs in the plugin terminal (checked by screenshot): tab and header follow the session title, and text styling, inline code, wrapping, emoji, status line and progress bars render without defects.
+- `make test`: pass, 27 of 27. `make verify`: pass (payload complete, packaged wasm passes, packaged node-pty spawns a 91×27 pty).
+- `make check`: tsc and esbuild clean.
+- Not yet run on this branch: the live Obsidian probes (`test:images`, `test:rendering`, `scripts/live-test.sh`) and a screenshot check of a real Claude Code session. Previous status (0.1.0 native build, 2026-10-03): images 19/19, rendering 31/31.
 
 ## Known issues and next steps
 
-- Open the PR for `modernize` (all checks done; push the branch first).
+- Run the live probes and a Claude Code session on `libghostty-1.0` in Obsidian, then open the PR.
+- Register a self-hosted runner to this repo (ghrunnerd) so CI can run; then tag `v0.9.0` after merging.
 - Fonts: chezmoi installs the four SauceCodePro Nerd Font Mono faces (dotfiles `run_onchange_darwin.sh.tmpl`) and sets `font-family = SauceCodePro Nerd Font Mono`.
-- Cursor-positioned Kitty placement (`a=T`, what `timg -pk` emits) is the next image feature (see IMPLEMENTATION.md).
+- Kitty graphics through libghostty-vt (`ghostty_kitty_graphics_*`, render-state placement iterator) would bring cursor-positioned placements (`a=T`, what `timg -pk` emits) and let `kitty-graphics.ts` go. It needs a synchronous PNG decoder installed with `ghostty_sys_set` (see IMPLEMENTATION.md).
+- Selection and key encoding could move to the library too (`ghostty_selection_gesture_*`, `ghostty_key_encoder_*`).
 - Two terminals in the same vault, each running `claude --continue`, race over the same session file and render blank. Use "New shell (no Agent)" for the second tab.
 - Scroll uses a full repaint instead of shifting canvas pixels.
 - Add font-family and font-size settings so the Ghostty config doesn't need editing.
 - Right-click "Open agent here" in the file tree.
-- Consider replacing `native/ghostty_vt/zig/lib.zig` with upstream's libghostty-vt C API.
-- Keep `vendor/ghostty` current: re-vendor from upstream, update `UPSTREAM`, rebuild, and run the probes.
+- Keep libghostty-vt current: bump `native/libghostty-vt.env`, run `make test` and the probes, and refresh `THIRD_PARTY_NOTICES.md` if upstream's linked dependencies changed.

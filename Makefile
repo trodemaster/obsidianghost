@@ -10,85 +10,97 @@ THEME_DIR  ?= $(HOME)/Developer/machine-cfg/obsisian/themes/$(THEME_NAME)
 # Obsidian vaults that get symlinks into the central plugin and theme dirs
 VAULTS ?= $(HOME)/orac $(HOME)/daneel
 
-# Toolchain (MacPorts: zig-0.16, nodejs22, npm10, python314)
-ZIG ?= zig-0.16
-OBSIDIAN_APP ?= /Applications/Obsidian.app
+# Release tag for install-release (default: the version in manifest.json)
+VERSION := $(shell node -p 'require("./manifest.json").version' 2>/dev/null)
+TAG ?= v$(VERSION)
 
-# Native addons are built for the Electron that the installed Obsidian ships.
-ELECTRON_VERSION ?= $(shell plutil -extract CFBundleVersion raw \
-  "$(OBSIDIAN_APP)/Contents/Frameworks/Electron Framework.framework/Resources/Info.plist" 2>/dev/null)
-
-NODE_GYP = npx node-gyp rebuild --runtime=electron --target=$(ELECTRON_VERSION) \
-  --arch=arm64 --dist-url=https://electronjs.org/headers --devdir=$(CURDIR)/.cache/node-gyp
+# libghostty-vt pin: VT_VERSION, VT_WASM_URL, VT_WASM_SHA256
+include native/libghostty-vt.env
 
 # Keep npm's cache in the repo: ~/.npm is root-owned on MacPorts machines (sudo npm / port).
 export npm_config_cache := $(CURDIR)/.cache/npm
 
-# npm install --ignore-scripts skips node-pty's own node-gyp run (wrong runtime);
-# `make pty` rebuilds it for Electron.
+# --ignore-scripts: node-pty's install script would try a node-gyp build; the
+# shipped N-API prebuild is all the plugin needs.
 STAMP := node_modules/.install-stamp
+PAYLOAD := dist/$(PLUGIN_ID)
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor deps check build native pty install reinstall reinstall-runtime \
-        sync-js sync-runtime setup-vaults setup-themes dev clean
+.PHONY: help doctor deps wasm build check test package verify release-zip install reinstall \
+        install-release sync setup-vaults setup-themes dev clean
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
 		'  make doctor             Check prerequisites and list anything missing' \
-		'  make install            Full build (JS + native + pty) and sync to the plugin dir' \
-		'  make reinstall          Fast loop: rebuild JS and sync manifest/styles/main.js' \
-		'  make reinstall-runtime  Rebuild JS and also sync native addon + node-pty' \
-		'  make native             Rebuild libghostty-vt + ghostty_vt.node (Zig 0.16)' \
-		'  make pty                Rebuild node-pty for the installed Obsidian Electron' \
+		'  make install            Build everything and sync it to the plugin dir' \
+		'  make reinstall          Fast loop: rebuild main.js and sync it' \
+		'  make install-release    Install a GitHub release zip (TAG=$(TAG))' \
+		'  make wasm               Download and verify libghostty-vt $(VT_VERSION) (wasm)' \
 		'  make check              Type-check and bundle' \
+		'  make test               Headless libghostty-vt adapter tests (no Obsidian needed)' \
+		'  make package            Assemble the plugin payload in $(PAYLOAD)/' \
+		'  make verify             package + check the payload (wasm tests, node-pty spawn)' \
+		'  make release-zip        package + dist/$(PLUGIN_ID)-$(VERSION).zip' \
 		'  make dev                esbuild watch mode' \
 		'  make setup-vaults       Symlink the plugin into each vault' \
 		'  make setup-themes       Symlink the Nocturnal Winter theme into each vault' \
 		'  make clean              Remove build output and caches' \
 		'' \
-		'Variables: PLUGIN_DIR, VAULTS, ZIG, ELECTRON_VERSION, OBSIDIAN_APP' \
-		'  PLUGIN_DIR=$(PLUGIN_DIR)' \
-		'  ELECTRON_VERSION=$(ELECTRON_VERSION)'
+		'Variables: PLUGIN_DIR, VAULTS, TAG' \
+		'  PLUGIN_DIR=$(PLUGIN_DIR)'
 
 doctor:
-	@ZIG="$(ZIG)" OBSIDIAN_APP="$(OBSIDIAN_APP)" PLUGIN_DIR="$(PLUGIN_DIR)" VAULTS="$(VAULTS)" scripts/doctor.sh
+	@PLUGIN_DIR="$(PLUGIN_DIR)" VAULTS="$(VAULTS)" scripts/doctor.sh
 
 $(STAMP): package.json package-lock.json
-	npm install --ignore-scripts
+	npm ci --ignore-scripts --no-audit --no-fund
 	touch $@
 
-deps: doctor $(STAMP)
+deps: $(STAMP)
 
-build: $(STAMP)
+wasm:
+	scripts/fetch-wasm.sh
+
+build: deps
 	npm run build
 
 check: build
 	npx tsc --noEmit
 
-native: deps
-	cd native/ghostty_vt/zig && ZIG_GLOBAL_CACHE_DIR=$(CURDIR)/.cache/zig \
-	  $(ZIG) build -Doptimize=ReleaseFast -Dtarget=aarch64-macos.11.0 --prefix ../zig-out
-	$(NODE_GYP)
-	cp build/Release/ghostty_vt.node native/ghostty_vt.node
+test: deps wasm
+	npm run test:vt
 
-pty: deps
-	MACOSX_DEPLOYMENT_TARGET=11.0 $(NODE_GYP) --directory node_modules/node-pty
+package: build wasm
+	scripts/package.sh
 
-install: native pty build sync-js sync-runtime
+verify: package
+	node scripts/verify-payload.mjs $(PAYLOAD)
 
-reinstall: build sync-js
+release-zip: check test verify
+	scripts/package.sh --zip
 
-reinstall-runtime: build sync-js sync-runtime
+install: doctor package sync
 
-sync-js:
+reinstall: build
 	install -d "$(PLUGIN_DIR)"
-	rsync -a manifest.json styles.css main.js "$(PLUGIN_DIR)/"
+	rsync -a main.js manifest.json styles.css "$(PLUGIN_DIR)/"
 
-sync-runtime:
-	install -d "$(PLUGIN_DIR)/native" "$(PLUGIN_DIR)/node_modules"
-	rsync -a native/ghostty_vt.node "$(PLUGIN_DIR)/native/"
-	rsync -a --delete node_modules/node-pty "$(PLUGIN_DIR)/node_modules/"
+# Sync the payload without touching data.json (the plugin's saved settings).
+sync:
+	install -d "$(PLUGIN_DIR)"
+	rsync -a --exclude node_modules "$(PAYLOAD)/" "$(PLUGIN_DIR)/"
+	install -d "$(PLUGIN_DIR)/node_modules"
+	rsync -a --delete "$(PAYLOAD)/node_modules/node-pty" "$(PLUGIN_DIR)/node_modules/"
+	@# Pre-0.9 installs carried the N-API addon in native/.
+	rm -rf "$(PLUGIN_DIR)/native"
+	@echo "Synced to $(PLUGIN_DIR). Restart Obsidian (or reload the plugin) to pick it up."
+
+install-release:
+	rm -rf .cache/release && install -d .cache/release
+	gh release download "$(TAG)" --pattern '$(PLUGIN_ID)-*.zip' --dir .cache/release
+	cd .cache/release && unzip -q $(PLUGIN_ID)-*.zip
+	$(MAKE) sync PAYLOAD=.cache/release/$(PLUGIN_ID)
 
 # link <source> <dest-subdir> over every vault; idempotent, never overwrites real dirs
 define link_into_vaults
@@ -108,9 +120,8 @@ setup-vaults:
 setup-themes:
 	$(call link_into_vaults,$(THEME_DIR),themes/$(THEME_NAME))
 
-dev: $(STAMP)
+dev: deps
 	npm run dev
 
 clean:
-	rm -rf build native/ghostty_vt.node native/ghostty_vt/zig-out native/ghostty_vt/zig/.zig-cache \
-	  .cache/zig .zig-cache main.js
+	rm -rf dist main.js native/ghostty-vt.wasm .cache/release
