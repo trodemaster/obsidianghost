@@ -63,7 +63,8 @@ Status on 2026-11-21 (branch `libghostty-1.0`, v0.9.0, libghostty-vt 1.0.1 wasm,
 - `make check`: tsc and esbuild clean.
 - Live in Obsidian (`orac`, after `make install` and an Obsidian restart): the plugin reports `Loaded libghostty-vt 1.0.1 (wasm)`; `test:rendering` pass, 31 of 31; `test:images` pass, 19 of 19.
 - Claude Code session checked by eye (screenshots): tables, code, CJK, box drawing and the status line render correctly. That check found the grapheme bug (👩‍💻/🇺🇸/👍🏽 split), now fixed and confirmed in `orac` after a restart with `scripts/obsidian-ui.sh`.
-- Not yet run on this branch: the `scripts/live-test.sh` probes.
+- Settings probes in `orac` (run directly with `obsidian-cli vault=orac eval`, no reload): `startup-command.js` pass, 15 of 15 (its `daneel` check skips where that wrapper is absent); `font-size.js` pass, 7 of 7. Neither writes `data.json`.
+- Not yet run on this branch: the other `scripts/live-test.sh` probes (`osc8-links`, `plain-url-links`, `shift-enter`, `session-title`, `drag-drop`). `live-test.sh` reloads the plugin, so run probes directly after a restart instead.
 
 ## Known issues and next steps
 

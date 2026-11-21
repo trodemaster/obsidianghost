@@ -129,10 +129,17 @@
     checks.whitespaceStartsShell = !dump(whitespace).includes("claude --continue");
     whitespace.detach();
 
-    setAgent("DANEEL_DRY_RUN=1 daneel");
+    // The work machine's `daneel` wrapper; skipped where it isn't installed.
+    setAgent("if command -v daneel >/dev/null; then DANEEL_DRY_RUN=1 daneel; else printf 'DANEEL_%s\\n' ABSENT; fi");
     const daneel = await open();
-    const daneelOutput = await waitForOutput(daneel, "--experimental");
-    checks.daneelScriptAvailable = daneelOutput.includes("copilot") && daneelOutput.includes("--no-sandbox");
+    let daneelOutput = "";
+    for (let i = 0; i < 20 && !/--experimental|DANEEL_ABSENT/.test(daneelOutput); i++) {
+      await wait(100);
+      daneelOutput = dump(daneel);
+    }
+    if (!daneelOutput.includes("DANEEL_ABSENT")) {
+      checks.daneelScriptAvailable = daneelOutput.includes("copilot") && daneelOutput.includes("--no-sandbox");
+    }
     daneel.detach();
 
     setAgent("obsidianghost_nonexistent_startup_command");
