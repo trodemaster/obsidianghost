@@ -59,11 +59,12 @@ Status on 2026-11-21 (branch `libghostty-1.0`, v0.9.0, libghostty-vt 1.0.1 wasm,
 
 - `make test`: pass, 27 of 27. `make verify`: pass (payload complete, packaged wasm passes, packaged node-pty spawns a 91×27 pty).
 - `make check`: tsc and esbuild clean.
-- Not yet run on this branch: the live Obsidian probes (`test:images`, `test:rendering`, `scripts/live-test.sh`) and a screenshot check of a real Claude Code session. Previous status (0.1.0 native build, 2026-10-03): images 19/19, rendering 31/31.
+- Live in Obsidian (`orac`, after `make install` and an Obsidian restart): the plugin reports `Loaded libghostty-vt 1.0.1 (wasm)`; `test:rendering` pass, 31 of 31; `test:images` pass, 19 of 19.
+- Not yet checked: a real Claude Code session by eye, and the `scripts/live-test.sh` probes.
 
 ## Known issues and next steps
 
-- Run the live probes and a Claude Code session on `libghostty-1.0` in Obsidian, then open the PR.
+- Try a real Claude Code session on `libghostty-1.0` in Obsidian, then open the PR.
 - Register a self-hosted runner to this repo (ghrunnerd) so CI can run; then tag `v0.9.0` after merging.
 - Fonts: chezmoi installs the four SauceCodePro Nerd Font Mono faces (dotfiles `run_onchange_darwin.sh.tmpl`) and sets `font-family = SauceCodePro Nerd Font Mono`.
 - Kitty graphics through libghostty-vt (`ghostty_kitty_graphics_*`, render-state placement iterator) would bring cursor-positioned placements (`a=T`, what `timg -pk` emits) and let `kitty-graphics.ts` go. It needs a synchronous PNG decoder installed with `ghostty_sys_set` (see IMPLEMENTATION.md).
