@@ -46,6 +46,7 @@ Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghost
 - **Titles**: the tab label and header follow the agent's OSC 0/2 title. Both need undocumented Obsidian API (`leaf.updateHeader()`, `view.titleEl`), reached through casts.
 - **Rendering**: native physical cells with wide characters and whole graphemes. Real regular/bold/italic faces load separately, and metrics come from font tables rounded to device pixels. Block elements and box lines are drawn procedurally. Grapheme clustering (DEC mode 2027) is on by default and survives RIS, matching Ghostty's `grapheme-width-method = unicode`; Claude Code never sends `2027h` but sizes emoji sequences as Ghostty does, so with it off 👩‍💻/🇺🇸/👍🏽 split and lose parts. libghostty-vt answers color, cursor, status, mode and device-attribute queries through its write-pty callback (`takeResponses()`). The caret follows DECTCEM, so programs that hide the cursor (Claude Code draws its own) show no caret, as in Ghostty. After installing a build, quit and restart Obsidian (`Cmd+Q`): reloads have caused problems before, and restarting is the user's call because it ends embedded sessions.
 - **Images**: the library's Kitty graphics are switched off at runtime (image storage limit 0), so it neither stores images nor replies. `kitty-graphics.ts` decodes direct-PNG / Unicode-virtual-placement commands alongside VT parsing, and the canvas paints them from the viewport's placeholder cells. Cursor-positioned placements are not supported (see IMPLEMENTATION.md).
+- **Font size**: per computer (`fontSizes` in `data.json`, same host key as the agent command); blank falls back to the Ghostty config's `font-size`. `plugin.ghosttyFont` is the parsed config, `plugin.terminalFont` the same with this computer's size; `setFontSize` re-lays out open views (`refreshFont`). Family still comes only from the Ghostty config. Probe: `scripts/tests/font-size.js`.
 - **Font standard**: `SauceCodePro Nerd Font Mono` at size 18 gives 22 × 45 physical-pixel cells at DPR 2 in both Ghostty and the plugin. Use a real family name in the Ghostty config, not a font filename.
 
 ## Testing
@@ -73,6 +74,6 @@ Status on 2026-11-21 (branch `libghostty-1.0`, v0.9.0, libghostty-vt 1.0.1 wasm,
 - Selection and key encoding could move to the library too (`ghostty_selection_gesture_*`, `ghostty_key_encoder_*`).
 - Two terminals in the same vault, each running `claude --continue`, race over the same session file and render blank. Use "New shell (no Agent)" for the second tab.
 - Scroll uses a full repaint instead of shifting canvas pixels.
-- Add font-family and font-size settings so the Ghostty config doesn't need editing.
+- Add a font-family setting (size is done) so the Ghostty config doesn't need editing.
 - Right-click "Open agent here" in the file tree.
 - Keep libghostty-vt current: bump `native/libghostty-vt.env`, run `make test` and the probes, and refresh `THIRD_PARTY_NOTICES.md` if upstream's linked dependencies changed.

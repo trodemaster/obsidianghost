@@ -62,6 +62,7 @@ In **Settings → Community plugins → Agent Ghostty Terminal**:
 
 - **Start directory**: blank opens terminals at the vault root. Accepts an absolute path, a `~`-prefixed path, or a vault-relative path.
 - **Shell**: path to the shell to start. Blank auto-detects MacPorts bash (`/opt/local/bin/bash`) when installed, otherwise `/bin/bash` (macOS's bash 3.2).
+- **Font size**: terminal font size in pixels, per computer like the agent command. Blank uses `font-size` from the Ghostty config. Changes apply to open terminals immediately.
 - **Agent start command**: the command that starts your agent, run once in each new or restored terminal in the start directory, for example `claude --continue`. It is stored **per computer** (by host name, shown in the setting), so a plugin folder shared between machines — such as one synced through git — can start a different agent or wrapper script on each. Blank starts only the shell; there is no built-in agent command.
 
 Terminals start the configured shell. Right-click the ghost ribbon icon or the terminal's **+** button and choose **New shell (no Agent)** to bypass the agent start command. Settings changes affect subsequent terminals, not running sessions. Installations shared between vaults via symlinks also share their settings.

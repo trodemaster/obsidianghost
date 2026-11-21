@@ -927,6 +927,12 @@ class GhosttyTerminalView extends ItemView {
     this.inputEl?.focus();
   };
 
+  // Font size changed in settings: re-measure cells and re-layout the grid in place.
+  refreshFont(): void {
+    this.charSize = null;
+    if (this.vt) this.updateSize(true);
+  }
+
   focusInput(): void {
     this.inputEl?.focus();
   }
@@ -1915,16 +1921,22 @@ interface GhosttyPluginSettings {
   startDirectory: string;
   // Absolute or "~"-prefixed path to the shell. Empty string = auto-detect (see resolveShell).
   shell: string;
-  // Agent start command per computer (key: computerName()). data.json lives in the plugin
-  // folder, which can be shared between machines (machine-cfg), so each machine keeps its own.
+  // Per computer (key: computerName()). data.json lives in the plugin folder, which can be
+  // shared between machines (machine-cfg), so each machine keeps its own values.
   agentCommands: Record<string, string>;
+  // Font size in px; a missing entry uses font-size from the Ghostty config.
+  fontSizes: Record<string, number>;
 }
 
 const DEFAULT_SETTINGS: GhosttyPluginSettings = {
   startDirectory: "",
   shell: "",
   agentCommands: {},
+  fontSizes: {},
 };
+
+const FONT_SIZE_MIN = 6;
+const FONT_SIZE_MAX = 72;
 
 // Short, case-normalized host name: "Far-Star.local" and "far-star" are the same computer.
 function computerName(): string {
@@ -1987,6 +1999,39 @@ class GhosttySettingTab extends PluginSettingTab {
       );
 
     const computer = computerName();
+    const ghosttySize = this.plugin.ghosttyFont.size;
+    const otherSizes = Object.keys(this.plugin.settings.fontSizes)
+      .filter((name) => name !== computer)
+      .sort();
+    new Setting(containerEl)
+      .setName("Font size")
+      .setDesc(
+        `Terminal font size in pixels on this computer (${computer}), ` +
+          `${FONT_SIZE_MIN}–${FONT_SIZE_MAX}. Leave blank to use font-size from the Ghostty ` +
+          `config (${ghosttySize}). Applies to open terminals immediately.` +
+          (otherSizes.length ? ` Also set on: ${otherSizes.join(", ")}.` : "")
+      )
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(FONT_SIZE_MIN);
+        text.inputEl.max = String(FONT_SIZE_MAX);
+        text
+          .setPlaceholder(String(ghosttySize))
+          .setValue(this.plugin.settings.fontSizes[computer]?.toString() ?? "")
+          .onChange(async (value) => {
+            const trimmed = value.trim();
+            if (!trimmed) {
+              await this.plugin.setFontSize(null);
+              return;
+            }
+            const size = Number(trimmed);
+            // Ignore partial input such as the "1" on the way to "14".
+            if (Number.isFinite(size) && size >= FONT_SIZE_MIN && size <= FONT_SIZE_MAX) {
+              await this.plugin.setFontSize(size);
+            }
+          });
+      });
+
     const others = Object.keys(this.plugin.settings.agentCommands)
       .filter((name) => name !== computer)
       .sort();
@@ -2015,7 +2060,9 @@ export default class GhosttyPlugin extends Plugin {
   private nativeState: GhosttyNativeState | null = null;
   private pendingShellOnly = false;
   settings: GhosttyPluginSettings = DEFAULT_SETTINGS;
-  terminalFont: TerminalFont = parseGhosttyConfig();
+  // Font from the Ghostty config; terminalFont is the same with this computer's size applied.
+  ghosttyFont: TerminalFont = parseGhosttyConfig();
+  terminalFont: TerminalFont = this.ghosttyFont;
   terminalColorConfig: GhosttyColorConfig = parseGhosttyColorConfig();
 
   async onload(): Promise<void> {
@@ -2174,7 +2221,9 @@ export default class GhosttyPlugin extends Plugin {
       ...DEFAULT_SETTINGS,
       ...rest,
       agentCommands: { ...(rest.agentCommands ?? {}) },
+      fontSizes: { ...(rest.fontSizes ?? {}) },
     };
+    this.applyFontSize();
     // Before 0.9.0 one "Startup command" applied to every computer. Keep it as this
     // computer's command; other computers set their own.
     if (legacy !== undefined) {
@@ -2189,6 +2238,29 @@ export default class GhosttyPlugin extends Plugin {
   // The agent start command for this computer ("" = shell only).
   agentCommand(): string {
     return (this.settings.agentCommands[computerName()] ?? "").trim();
+  }
+
+  // This computer's font size, or the Ghostty config's.
+  fontSize(): number {
+    const size = this.settings.fontSizes[computerName()];
+    return typeof size === "number" && size >= FONT_SIZE_MIN && size <= FONT_SIZE_MAX
+      ? size
+      : this.ghosttyFont.size;
+  }
+
+  async setFontSize(size: number | null): Promise<void> {
+    const computer = computerName();
+    if (size === null) delete this.settings.fontSizes[computer];
+    else this.settings.fontSizes[computer] = size;
+    await this.saveSettings();
+    this.applyFontSize();
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_GHOSTTY)) {
+      if (leaf.view instanceof GhosttyTerminalView) leaf.view.refreshFont();
+    }
+  }
+
+  private applyFontSize(): void {
+    this.terminalFont = { ...this.ghosttyFont, size: this.fontSize() };
   }
 
   async setAgentCommand(value: string): Promise<void> {
