@@ -6,6 +6,8 @@ Display name **Agent Ghostty Terminal**, plugin ID `obsidian-claude-ghostty`. De
 
 ## Install
 
+Having an agent do it? Point it at [INSTALL.md](INSTALL.md), a step-by-step install and upgrade guide written for agents (Claude Code, Codex, Copilot CLI): it checks the machine, verifies the release download, keeps your settings, and asks before enabling the plugin or restarting Obsidian.
+
 ### From a release
 
 Each [GitHub release](https://github.com/trodemaster/obsidianghost/releases) has a zip, `obsidian-claude-ghostty-<version>.zip`, holding a ready-to-use plugin folder. Unzip it into `<vault>/.obsidian/plugins/` so you get `<vault>/.obsidian/plugins/obsidian-claude-ghostty/`. Unzip it rather than copying files one by one: `node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper` must stay executable.
@@ -106,6 +108,7 @@ Obsidian (Electron renderer)
 
 ## More
 
+- [INSTALL.md](INSTALL.md): install, upgrade and uninstall steps for agents
 - [CHANGELOG.md](CHANGELOG.md): release notes
 - [IMPLEMENTATION.md](IMPLEMENTATION.md): architecture and design notes
 - [CLAUDE.md](CLAUDE.md): development, testing, releases and to-dos
