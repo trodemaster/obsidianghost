@@ -1,6 +1,6 @@
 (async () => {
   const {
-    GhosttyTerminalView, native, parseGhosttyConfig, parseStyleRuns,
+    GhosttyTerminalView, native, parseGhosttyConfig,
     readFontMetrics, readFontNames, terminalMetrics, fixture, fixtureMetrics,
   } = globalThis.ghosttyImageTestModule;
   const plugin = app.plugins.getPlugin("obsidian-claude-ghostty");
@@ -25,12 +25,13 @@
     const colors = query.takeResponses();
     checks.colorQueries = colors === "\x1b]11;rgb:0d0d/0d0d/1717\x07\x1b]10;rgb:e6e6/e5e5/e5e5\x1b\\";
     checks.responsesDrained = query.takeResponses() === "";
-    query.feed("\x1b[?2027$p\x1b[?2027h\x1b[?2027$p\x1b[?2027l");
-    checks.graphemeModeNegotiation = query.takeResponses() === "\x1b[?2027;2$y\x1b[?2027;1$y";
+    // On by default, as in Ghostty; programs can still turn it off and back on.
+    query.feed("\x1b[?2027$p\x1b[?2027l\x1b[?2027$p\x1b[?2027h\x1b[?2027$p");
+    checks.graphemeModeNegotiation = query.takeResponses() === "\x1b[?2027;1$y\x1b[?2027;2$y\x1b[?2027;1$y";
     query.feed("中\x1b[6nZ");
     checks.cursorQueryBeforeLaterOutput = query.takeResponses() === "\x1b[1;3R";
     query.feed("\x1b[2J\x1b[H\x1b[4;33mX\x1b[0mY");
-    const runs = parseStyleRuns(query.dumpViewportRowStyleRuns(0));
+    const runs = query.dumpViewportRowStyleRuns(0);
     checks.attributeRunBoundaries = runs[0].startCol === 1 && runs[0].endCol === 1 &&
       (runs[0].flags & 8) !== 0 && runs[1].startCol === 2 && runs[1].flags === 0;
     query.resize(4, 3);
@@ -52,7 +53,7 @@
     view.contentEl.empty();
     Object.setPrototypeOf(view, GhosttyTerminalView.prototype);
     const testPlugin = Object.create(plugin);
-    testPlugin.settings = { ...plugin.settings, startupCommand: "" };
+    testPlugin.settings = { ...plugin.settings, agentCommands: {} };
     testPlugin.consumeShellOnlyFlag = () => true;
     testPlugin.terminalFont = font;
     view.plugin = testPlugin;
@@ -96,9 +97,9 @@
     };
     checks.inlineCodeBackground = pixel(0, 2) === 0x242c37 && pixel(17, 2) === 0x0d0d17;
     checks.inputBackground = pixel(0, 3) === 0x131b23;
-    const styles = parseStyleRuns(view.vt.dumpViewportRowStyleRuns(4));
+    const styles = view.vt.dumpViewportRowStyleRuns(4);
     checks.boldItalicAttributes = styles.some((run) => (run.flags & 6) === 6);
-    const faint = parseStyleRuns(view.vt.dumpViewportRowStyleRuns(5));
+    const faint = view.vt.dumpViewportRowStyleRuns(5);
     checks.faintAndBrightColors = !!(faint[0].flags & 16) && faint.some((run) => run.fg === 0x6096ff);
     const ctx = view.canvasContext;
     const boxPixels = Math.max(1, Math.ceil(meta.underlineThickness / meta.unitsPerEm * font.size * dpr));
@@ -116,7 +117,7 @@
       ctx.getImageData(Math.round(3 * width * dpr), centerY + boxPixels, 1, 1).data[0] === 0x0d;
     const track = ctx.getImageData(Math.round(3 * width * dpr), Math.round(12 * height * dpr),
       Math.round(7 * width * dpr), Math.round(height * dpr)).data;
-    const trackColor = parseStyleRuns(view.vt.dumpViewportRowStyleRuns(12))[0].fg;
+    const trackColor = view.vt.dumpViewportRowStyleRuns(12)[0].fg;
     const expectedTrack = [trackColor >> 16, (trackColor >> 8) & 255, trackColor & 255]
       .map((value, channel) => Math.round([13, 13, 23][channel] * (191 / 255) + value * (64 / 255)));
     checks.smoothProgressTrack = Array.from({ length: track.length / 4 }, (_, i) =>

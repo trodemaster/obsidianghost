@@ -8,10 +8,17 @@
 //
 // Run via: scripts/live-test.sh scripts/tests/osc8-links.js
 (async () => {
+  let probeLeaf;
+  try {
   const VIEW_TYPE = "ghostty-terminal-view";
-  const leaves = app.workspace.getLeavesOfType(VIEW_TYPE);
-  if (!leaves.length) return { error: "no terminal leaf found" };
-  const leaf = leaves[leaves.length - 1];
+  // Own shell-only tab, so the probe never writes into a terminal running an agent.
+  const probePlugin = app.plugins.getPlugin("obsidian-claude-ghostty");
+  const probeBefore = new Set(app.workspace.getLeavesOfType(VIEW_TYPE));
+  await probePlugin.openNewTerminal(undefined, { shellOnly: true });
+  const leaf = app.workspace.getLeavesOfType(VIEW_TYPE).find((l) => !probeBefore.has(l));
+  if (!leaf) return { error: "probe terminal did not open" };
+  probeLeaf = leaf;
+  for (let i = 0; i < 50 && !(leaf.view.pty && leaf.view.vt); i++) await new Promise((r) => setTimeout(r, 100));
   const view = leaf.view;
   if (!view.pty || !view.vt || !view.canvasEl) {
     return { error: "view not fully initialized" };
@@ -76,4 +83,7 @@
     result.opensWithModifier[0][0] === expectedUrl;
 
   return result;
+  } finally {
+    probeLeaf?.detach();
+  }
 })();

@@ -5,7 +5,13 @@
   const plugin = app.plugins.getPlugin("obsidian-claude-ghostty");
   if (!plugin) throw new Error("plugin not found");
 
-  const originalSettings = { ...plugin.settings };
+  const originalSettings = structuredClone(plugin.settings);
+  // Same normalization as computerName() in main.ts.
+  const computer = require("os").hostname().split(".")[0].toLowerCase() || "default";
+  // In-memory only: the probe never saves, so data.json is untouched.
+  const setAgent = (command) => {
+    plugin.settings.agentCommands = { ...plugin.settings.agentCommands, [computer]: command };
+  };
   const leaves = [];
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const dump = (leaf) => {
@@ -32,19 +38,39 @@
   const checks = {};
 
   try {
-    // Old saved settings without startupCommand must load a blank default.
-    const loadData = plugin.loadData;
+    // Settings loading: blank default, migration of the pre-0.9 shared "Startup command"
+    // into this computer's entry, and other computers' commands left alone.
+    const { loadData, saveData } = plugin;
+    let saved = null;
     try {
+      plugin.saveData = async (data) => { saved = structuredClone(data); };
       plugin.loadData = async () => ({ startDirectory: "" });
       await plugin.loadSettings();
-      checks.oldSettingsDefaultToShell = plugin.settings.startupCommand === "";
+      checks.oldSettingsDefaultToShell = plugin.agentCommand() === "" && saved === null;
+
+      plugin.loadData = async () => ({ startupCommand: "  legacy-agent  ", agentCommands: { otherhost: "other-agent" } });
+      await plugin.loadSettings();
+      checks.legacyCommandMigratesToThisComputer =
+        plugin.agentCommand() === "legacy-agent" &&
+        saved?.agentCommands?.[computer] === "legacy-agent" &&
+        saved?.agentCommands?.otherhost === "other-agent" &&
+        !("startupCommand" in saved);
+
+      plugin.loadData = async () => ({ agentCommands: { otherhost: "other-agent" } });
+      await plugin.loadSettings();
+      checks.otherComputersCommandIgnored = plugin.agentCommand() === "";
+
+      plugin.loadData = async () => ({ startupCommand: "legacy-agent", agentCommands: { [computer]: "mine" } });
+      await plugin.loadSettings();
+      checks.migrationKeepsExistingCommand = plugin.agentCommand() === "mine";
     } finally {
       plugin.loadData = loadData;
-      plugin.settings = { ...originalSettings };
+      plugin.saveData = saveData;
+      plugin.settings = structuredClone(originalSettings);
     }
 
     plugin.settings.startDirectory = "";
-    plugin.settings.startupCommand = "";
+    setAgent("");
     const blank = await open();
     checks.defaultTitle = blank.view.getDisplayText() === "Agent";
     blank.view.pty.write("printf 'SHELL_%s:%s\\n' \"$BASH_VERSION\" \"$PWD\"; printf 'BASH_%s\\n' READY\r");
@@ -61,7 +87,7 @@
       blank.view.titleEl?.textContent === "Agent regression title";
     blank.detach();
 
-    plugin.settings.startupCommand = "  printf 'AGENT_%s\\n' STARTED  ";
+    setAgent("  printf 'AGENT_%s\\n' STARTED  ");
     const configured = await open();
     await waitForOutput(configured, "AGENT_STARTED");
     configured.view.pty.write("printf 'AFTER_%s\\n' STARTUP\r");
@@ -89,27 +115,34 @@
     restored.detach();
 
     plugin.settings.startDirectory = "/tmp";
-    plugin.settings.startupCommand = "printf 'DIRECTORY_%s\\n' \"$PWD\"";
+    setAgent("printf 'DIRECTORY_%s\\n' \"$PWD\"");
     const directory = await open();
     const directoryOutput = await waitForOutput(directory, "DIRECTORY_/");
     checks.startDirectoryHonored = /DIRECTORY_(\/private)?\/tmp/.test(directoryOutput);
     directory.detach();
 
     plugin.settings.startDirectory = "";
-    plugin.settings.startupCommand = "   ";
+    setAgent("   ");
     const whitespace = await open();
     whitespace.view.pty.write("printf 'WHITESPACE_%s\\n' READY\r");
     await waitForOutput(whitespace, "WHITESPACE_READY");
     checks.whitespaceStartsShell = !dump(whitespace).includes("claude --continue");
     whitespace.detach();
 
-    plugin.settings.startupCommand = "DANEEL_DRY_RUN=1 daneel";
+    // The work machine's `daneel` wrapper; skipped where it isn't installed.
+    setAgent("if command -v daneel >/dev/null; then DANEEL_DRY_RUN=1 daneel; else printf 'DANEEL_%s\\n' ABSENT; fi");
     const daneel = await open();
-    const daneelOutput = await waitForOutput(daneel, "--experimental");
-    checks.daneelScriptAvailable = daneelOutput.includes("copilot") && daneelOutput.includes("--no-sandbox");
+    let daneelOutput = "";
+    for (let i = 0; i < 20 && !/--experimental|DANEEL_ABSENT/.test(daneelOutput); i++) {
+      await wait(100);
+      daneelOutput = dump(daneel);
+    }
+    if (!daneelOutput.includes("DANEEL_ABSENT")) {
+      checks.daneelScriptAvailable = daneelOutput.includes("copilot") && daneelOutput.includes("--no-sandbox");
+    }
     daneel.detach();
 
-    plugin.settings.startupCommand = "obsidianghost_nonexistent_startup_command";
+    setAgent("obsidianghost_nonexistent_startup_command");
     const failed = await open();
     await waitForOutput(failed, "command not found");
     checks.failedCommandVisible = true;

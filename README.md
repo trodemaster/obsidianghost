@@ -1,23 +1,23 @@
 # obsidianghost
 
-Obsidian plugin that embeds an agent terminal (Claude Code, Copilot CLI, or any shell command) using libghostty-vt (native N-API) + node-pty, with a Canvas renderer, inline Kitty images, and vault-aware OSC 8 hyperlink handling.
+Obsidian plugin that embeds an agent terminal (Claude Code, Copilot CLI, or any shell command) using libghostty-vt 1.0 (official WebAssembly build) + node-pty, with a Canvas renderer, inline Kitty images, and vault-aware OSC 8 hyperlink handling.
 
 The plugin ID stays `obsidian-claude-ghostty` so saved layouts, enabled-plugin entries, and hotkeys keep working; the display name is **Agent Ghostty Terminal**.
 
 ## Requirements
 
-macOS on Apple Silicon with Obsidian 1.12.0 or newer (desktop only). Install the toolchain with MacPorts:
+macOS on Apple Silicon with Obsidian 1.12.0 or newer (desktop only). The only toolchain is Node, from MacPorts:
 
 ```bash
-sudo port install zig-0.16 nodejs22 npm10 python314
-xcode-select --install     # if the Xcode Command Line Tools are missing
+sudo port install nodejs22 npm10
 ```
 
-- Zig 0.16 builds libghostty-vt from the vendored Ghostty sources (`vendor/ghostty`, no submodule step). It links against the stock macOS SDK, so no extra SDK is needed.
-- Node.js, npm and Python 3 are used by esbuild and node-gyp.
-- The native addons are built for the Electron version of the **installed Obsidian**, which the Makefile reads automatically (override with `ELECTRON_VERSION=x.y.z`).
+Nothing is compiled:
 
-`make doctor` checks all of this and lists anything that is missing; the build targets run it first.
+- **libghostty-vt** is the official [libghostty-vt 1.0](https://lib.ghostty.org/vt/) WebAssembly release. `make wasm` downloads the version pinned in `native/libghostty-vt.env` and checks its SHA-256.
+- **node-pty** uses its shipped N-API prebuild, which works with any Electron version, so Obsidian updates need no rebuild.
+
+`make doctor` lists anything that is missing; `make install` runs it first.
 
 ## Install
 
@@ -29,7 +29,8 @@ make install
 make setup-vaults
 ```
 
-- `make install` runs `npm install`, builds `ghostty_vt.node` and `pty.node` for Obsidian's Electron, bundles the plugin, and syncs `manifest.json`, `styles.css`, `main.js`, and the native payload into the central plugin directory, `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Override it with `make install PLUGIN_DIR=/path`.
+- `make install` installs npm dependencies, fetches `ghostty-vt.wasm`, bundles `main.js`, assembles the payload in `dist/obsidian-claude-ghostty/`, and syncs it into the central plugin directory, `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Override it with `make install PLUGIN_DIR=/path`. The sync never touches `data.json`, so settings survive.
+- Without a checkout's build, `make install-release TAG=v0.9.0` installs a published GitHub release zip instead (needs `gh` signed in to an account that can read the repo).
 - `make setup-vaults` symlinks that directory into `<vault>/.obsidian/plugins/obsidian-claude-ghostty` for each vault in `VAULTS` (default `~/orac` and `~/daneel`; override with `make setup-vaults VAULTS="..."`). It is idempotent and skips missing vaults.
 - Optionally run `make setup-themes` to link the Nocturnal Winter theme, then select it once in **Settings → Appearance**.
 
@@ -40,17 +41,20 @@ Then in Obsidian: **Settings → Community plugins**, turn off Restricted mode i
 ```bash
 git pull
 make reinstall           # TypeScript/CSS changes only
-make install             # Zig, node-pty, vendored Ghostty, or Obsidian/Electron changes
+make install             # dependency, libghostty-vt, or packaging changes
 ```
 
-After syncing JS, reload with `Cmd+P` → "Reload app without saving". After syncing a new `.node` file, restart Obsidian: a plugin reload alone can keep Node's old addon cache, and an outdated addon is reported explicitly. Reloads and restarts end embedded terminal sessions.
+Then quit Obsidian (`Cmd+Q`) and open it again. A plugin or app reload often works too, but a full restart is the reliable way to pick up a new build. Restarting ends embedded terminal sessions.
+
+Upgrading from 0.1.x: `make install` removes the old `native/ghostty_vt.node` from the plugin directory. Restart Obsidian once afterwards so it drops the old addon.
 
 ### Troubleshooting
 
 - **`make doctor` reports MISSING**: run the `port install` command it prints.
 - **npm cache permission errors**: the Makefile uses a repo-local npm cache (`.cache/npm`) and doesn't touch `~/.npm`. If you run `npm` by hand, set `npm_config_cache` the same way.
 - **Plugin missing in Obsidian**: confirm the vault symlink exists, then restart Obsidian.
-- **Native module load or version errors**: run `make install` and restart Obsidian.
+- **"libghostty-vt not found"** in the terminal pane: `ghostty-vt.wasm` is missing from the plugin directory. Run `make install`.
+- **`posix_spawnp failed`**: node-pty's `spawn-helper` lost its execute bit. `make install` sets it; for a hand-copied install run `chmod 755 node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper` in the plugin directory.
 
 ## Settings
 
@@ -58,11 +62,12 @@ In **Settings → Community plugins → Agent Ghostty Terminal**:
 
 - **Start directory**: blank opens terminals at the vault root. Accepts an absolute path, a `~`-prefixed path, or a vault-relative path.
 - **Shell**: path to the shell to start. Blank auto-detects MacPorts bash (`/opt/local/bin/bash`) when installed, otherwise `/bin/bash` (macOS's bash 3.2).
-- **Startup command**: an optional shell command or script, run once in each new or restored terminal in the start directory. Blank starts only the shell; there is no built-in agent command. For Claude Code, set it to `claude --continue`.
+- **Font size**: terminal font size in pixels, per computer like the agent command. Blank uses `font-size` from the Ghostty config. Changes apply to open terminals immediately.
+- **Agent start command**: the command that starts your agent, run once in each new or restored terminal in the start directory, for example `claude --continue`. It is stored **per computer** (by host name, shown in the setting), so a plugin folder shared between machines — such as one synced through git — can start a different agent or wrapper script on each. Blank starts only the shell; there is no built-in agent command.
 
-Terminals start the configured shell. Right-click the ghost ribbon icon or the terminal's **+** button and choose **New shell (no Agent)** to bypass the startup command. Settings changes affect subsequent terminals, not running sessions. Installations shared between vaults via symlinks also share their settings.
+Terminals start the configured shell. Right-click the ghost ribbon icon or the terminal's **+** button and choose **New shell (no Agent)** to bypass the agent start command. Settings changes affect subsequent terminals, not running sessions. Installations shared between vaults via symlinks also share their settings.
 
-> Earlier versions auto-launched `claude --continue`. That is now an explicit startup command setting, so existing installs need to set it once.
+> 0.9.0 replaced the shared **Startup command** with the per-computer **Agent start command**. An existing startup command becomes the command for the first computer that loads 0.9.0; set it once on each other computer.
 
 ## Features
 
@@ -82,7 +87,7 @@ The image cache is limited to 64 MiB of decoded pixels per terminal. Unsupported
 
 ### Text Rendering
 
-Applications can negotiate grapheme clustering through DEC mode 2027; it is not enabled globally. Shells receive `COLORTERM=truecolor`, and native color/cursor queries are answered so applications can choose their correct theme and backgrounds.
+Grapheme clustering (DEC mode 2027) is on by default, as in Ghostty, so emoji sequences such as 👩‍💻, 🇺🇸 and 👍🏽 take one wide cell; programs can still turn it off. Shells receive `COLORTERM=truecolor`, and libghostty-vt answers color, cursor, mode and device-attribute queries so applications can choose their correct theme and backgrounds. The caret follows the program's cursor visibility (DECTCEM), as in Ghostty.
 
 Installed TTF/OTF fonts resolve by family metadata or legacy filename stem. Regular, bold, italic, and bold-italic faces load separately; unavailable faces produce warnings and use browser fallback/synthesis. Cell pitch and baseline use font-table metrics rounded to physical pixels, with Canvas metrics as an explicit fallback. Backgrounds are painted before text, and common light/heavy box lines are drawn on the device-pixel grid. Canvas and native Ghostty rasterization are not bit-identical.
 
@@ -95,10 +100,10 @@ Use a real family name in Ghostty, for example `font-family = SauceCodePro Nerd 
 ```bash
 make doctor             # check prerequisites
 make reinstall          # rebuild JS and sync — use on every TypeScript change
-make reinstall-runtime  # rebuild JS + sync current native binaries
-make native             # rebuild ghostty_vt.node (Zig source changed)
-make pty                # rebuild pty.node (node-pty source/Electron bump)
 make check              # type-check + bundle
+make test               # headless libghostty-vt adapter tests (plain Node, no Obsidian)
+make verify             # package, then check the payload (wasm tests, node-pty spawn)
+make release-zip        # check + test + verify, then dist/obsidian-claude-ghostty-<version>.zip
 npm run test:images -- <vault>     # isolated image probe in running Obsidian; does not reload agents
 npm run test:rendering -- <vault>  # isolated native-cell, font, color, and pixel probe
 npm run dev             # esbuild watch mode
@@ -110,7 +115,15 @@ For a measured Ghostty comparison, run the same fixture in Ghostty:
 `node scripts/rendering-fixture.cjs --measure /tmp/ghostty-cells.json` (press `q` to close), then run
 `GHOSTTY_METRICS_FILE=/tmp/ghostty-cells.json npm run test:rendering`.
 
+### Releases
+
+Versions follow semver; 0.x releases are betas. To release, bump `version` in `manifest.json` and `package.json`, add a `versions.json` entry and a `CHANGELOG.md` section, merge to `main`, then push a tag `v<version>`. The CI workflow (`.github/workflows/ci.yml`) runs on a self-hosted macOS runner that is registered only when needed: `scripts/ci-runner.sh up` before pushing (or while jobs are queued), `scripts/ci-runner.sh down` afterwards. It tests every push and pull request, and for a tag it builds the zip and publishes a GitHub release (0.x is marked pre-release).
+
+To update libghostty-vt, change the three values in `native/libghostty-vt.env` (the hash comes from the release's `SHA256SUMS`), run `make test`, and update `THIRD_PARTY_NOTICES.md` if the release's `deps/libghostty-vt-third-party.json` changed.
+
 ## Project Docs
 
 - [CLAUDE.md](CLAUDE.md) — conventions, toolchain, testing status, and next steps
-- [IMPLEMENTATION.md](IMPLEMENTATION.md) — architecture, native layer, and design findings
+- [IMPLEMENTATION.md](IMPLEMENTATION.md) — architecture, engine adapter, and design findings
+- [CHANGELOG.md](CHANGELOG.md) — release notes
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — bundled third-party licenses

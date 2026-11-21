@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "fs";
-import { homedir } from "os";
+import { homedir, hostname } from "os";
 import { dirname, isAbsolute, join, normalize as normalizeFsPath, relative } from "path";
 import {
   App,
@@ -18,13 +18,12 @@ import { readFontMetrics, readFontNames, terminalMetrics, type FontMetrics } fro
 import { KittyGraphics, IMAGE_PLACEHOLDER, decodeImageCell, terminalRowCells, type ImageCell } from "./kitty-graphics";
 import {
   StyleRunFlags,
-  parseDirtyRows,
-  parseStyleRuns,
+  loadGhosttyNative,
   textRangeToCells,
-  tryLoadGhosttyNative,
   type GhosttyNative,
   type GhosttyNativeState,
   type GhosttyTerminal,
+  type StyleRun,
 } from "./native/ghostty";
 
 const VIEW_TYPE_GHOSTTY = "ghostty-terminal-view";
@@ -171,7 +170,7 @@ class GhosttyTerminalView extends ItemView {
     // otherwise Canvas falls back to a generic monospace and caches wrong metrics.
     await this.ensureFontLoaded();
 
-    const nativeState = await Promise.resolve(this.plugin.getNativeState(true));
+    const nativeState = await this.plugin.getNativeState(true);
 
     if (nativeState.native) {
       this.startSession(nativeState.native);
@@ -297,9 +296,9 @@ class GhosttyTerminalView extends ItemView {
       this.leaf.detach();
     });
 
-    const startupCommand = this.plugin.settings.startupCommand.trim();
-    if (!shellOnly && startupCommand) {
-      this.pty.write(`${startupCommand}\r`);
+    const agentCommand = this.plugin.agentCommand();
+    if (!shellOnly && agentCommand) {
+      this.pty.write(`${agentCommand}\r`);
     }
 
     this.bodyEl.tabIndex = 0;
@@ -465,7 +464,7 @@ class GhosttyTerminalView extends ItemView {
     const { rows } = this.viewportSize;
     const dirtyRows = forceFull
       ? this.allViewportRows()
-      : parseDirtyRows(this.vt.takeDirtyViewportRows(rows));
+      : this.vt.takeDirtyViewportRows(rows);
 
     if (forceFull) {
       this.clearCanvas();
@@ -487,7 +486,9 @@ class GhosttyTerminalView extends ItemView {
     const { cols, rows } = this.measureSize();
     const changed = cols !== this.viewportSize.cols || rows !== this.viewportSize.rows;
     this.viewportSize = { cols, rows };
-    this.vt.resize(cols, rows);
+    const { width, height } = this.getCharSize();
+    const dpr = window.devicePixelRatio || 1;
+    this.vt.resize(cols, rows, width * dpr, height * dpr);
     this.pty.resize(cols, rows);
     this.scheduleRender(forceFull || changed);
   }
@@ -627,7 +628,7 @@ class GhosttyTerminalView extends ItemView {
     const rect = this.canvasEl.getBoundingClientRect();
     const y = row * height;
     const cells = this.vt.dumpViewportRowCells(row);
-    const runs = parseStyleRuns(this.vt.dumpViewportRowStyleRuns(row));
+    const runs = this.vt.dumpViewportRowStyleRuns(row);
     const ctx = this.canvasContext;
 
     ctx.fillStyle = this.themeColors.bgCss;
@@ -667,7 +668,7 @@ class GhosttyTerminalView extends ItemView {
     this.drawImageCells(cells, row, runs);
   }
 
-  private drawImageCells(cells: string[], row: number, runs: ReturnType<typeof parseStyleRuns>): void {
+  private drawImageCells(cells: string[], row: number, runs: StyleRun[]): void {
     if (!this.canvasContext || !this.graphics) return;
     const { width, height } = this.getCharSize();
     let previous: ImageCell | undefined;
@@ -925,6 +926,12 @@ class GhosttyTerminalView extends ItemView {
   private focusTerminal = (): void => {
     this.inputEl?.focus();
   };
+
+  // Font size changed in settings: re-measure cells and re-layout the grid in place.
+  refreshFont(): void {
+    this.charSize = null;
+    if (this.vt) this.updateSize(true);
+  }
 
   focusInput(): void {
     this.inputEl?.focus();
@@ -1535,12 +1542,8 @@ class GhosttyTerminalView extends ItemView {
   private applyGhosttyPalette(): void {
     if (!this.vt) return;
     const { palette } = this.plugin.terminalColorConfig;
-    if (palette.size === 0) return;
-    let osc = "";
-    for (const [index, color] of palette) {
-      osc += `\x1b]4;${index};#${color.toString(16).padStart(6, "0")}\x07`;
-    }
-    this.vt.feed(osc);
+    // Set as the default palette, so OSC 104 resets to the Ghostty theme.
+    this.vt.setPalette(palette);
   }
 
   private async openHyperlink(uri: string): Promise<void> {
@@ -1916,16 +1919,29 @@ function parseGhosttyConfig(): TerminalFont {
 interface GhosttyPluginSettings {
   // Absolute, "~"-prefixed, or vault-root-relative path. Empty string = vault root.
   startDirectory: string;
-  startupCommand: string;
   // Absolute or "~"-prefixed path to the shell. Empty string = auto-detect (see resolveShell).
   shell: string;
+  // Per computer (key: computerName()). data.json lives in the plugin folder, which can be
+  // shared between machines (machine-cfg), so each machine keeps its own values.
+  agentCommands: Record<string, string>;
+  // Font size in px; a missing entry uses font-size from the Ghostty config.
+  fontSizes: Record<string, number>;
 }
 
 const DEFAULT_SETTINGS: GhosttyPluginSettings = {
   startDirectory: "",
-  startupCommand: "",
   shell: "",
+  agentCommands: {},
+  fontSizes: {},
 };
+
+const FONT_SIZE_MIN = 6;
+const FONT_SIZE_MAX = 72;
+
+// Short, case-normalized host name: "Far-Star.local" and "far-star" are the same computer.
+function computerName(): string {
+  return hostname().split(".")[0].toLowerCase() || "default";
+}
 
 // MacPorts bash 5 when installed; /bin/bash on macOS is bash 3.2.
 const PREFERRED_SHELLS = ["/opt/local/bin/bash", "/bin/bash"];
@@ -1982,20 +1998,59 @@ class GhosttySettingTab extends PluginSettingTab {
           })
       );
 
+    const computer = computerName();
+    const ghosttySize = this.plugin.ghosttyFont.size;
+    const otherSizes = Object.keys(this.plugin.settings.fontSizes)
+      .filter((name) => name !== computer)
+      .sort();
     new Setting(containerEl)
-      .setName("Startup command")
+      .setName("Font size")
       .setDesc(
-        "Command or script to run in each new or restored terminal, after starting the shell " +
-          "in the start directory. Leave blank for a shell only. New shell (no Agent) bypasses " +
-          "this command. Changes apply to the next terminal you open."
+        `Terminal font size in pixels on this computer (${computer}), ` +
+          `${FONT_SIZE_MIN}–${FONT_SIZE_MAX}. Leave blank to use font-size from the Ghostty ` +
+          `config (${ghosttySize}). Applies to open terminals immediately.` +
+          (otherSizes.length ? ` Also set on: ${otherSizes.join(", ")}.` : "")
+      )
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(FONT_SIZE_MIN);
+        text.inputEl.max = String(FONT_SIZE_MAX);
+        text
+          .setPlaceholder(String(ghosttySize))
+          .setValue(this.plugin.settings.fontSizes[computer]?.toString() ?? "")
+          .onChange(async (value) => {
+            const trimmed = value.trim();
+            if (!trimmed) {
+              await this.plugin.setFontSize(null);
+              return;
+            }
+            const size = Number(trimmed);
+            // Ignore partial input such as the "1" on the way to "14".
+            if (Number.isFinite(size) && size >= FONT_SIZE_MIN && size <= FONT_SIZE_MAX) {
+              await this.plugin.setFontSize(size);
+            }
+          });
+      });
+
+    const others = Object.keys(this.plugin.settings.agentCommands)
+      .filter((name) => name !== computer)
+      .sort();
+    new Setting(containerEl)
+      .setName("Agent start command")
+      .setDesc(
+        `Command that starts the agent in each new or restored terminal on this computer ` +
+          `(${computer}), run after the shell starts in the start directory, for example ` +
+          `"claude --continue". Each computer keeps its own value, so a plugin folder shared ` +
+          `between machines can start a different agent on each. Leave blank for a shell only. ` +
+          `New shell (no Agent) skips it. Changes apply to the next terminal you open.` +
+          (others.length ? ` Also set on: ${others.join(", ")}.` : "")
       )
       .addText((text) =>
         text
-          .setPlaceholder("e.g. daneel")
-          .setValue(this.plugin.settings.startupCommand)
+          .setPlaceholder("claude --continue")
+          .setValue(this.plugin.agentCommand())
           .onChange(async (value) => {
-            this.plugin.settings.startupCommand = value;
-            await this.plugin.saveSettings();
+            await this.plugin.setAgentCommand(value);
           })
       );
   }
@@ -2005,7 +2060,9 @@ export default class GhosttyPlugin extends Plugin {
   private nativeState: GhosttyNativeState | null = null;
   private pendingShellOnly = false;
   settings: GhosttyPluginSettings = DEFAULT_SETTINGS;
-  terminalFont: TerminalFont = parseGhosttyConfig();
+  // Font from the Ghostty config; terminalFont is the same with this computer's size applied.
+  ghosttyFont: TerminalFont = parseGhosttyConfig();
+  terminalFont: TerminalFont = this.ghosttyFont;
   terminalColorConfig: GhosttyColorConfig = parseGhosttyColorConfig();
 
   async onload(): Promise<void> {
@@ -2156,16 +2213,71 @@ export default class GhosttyPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = (await this.loadData()) ?? {};
+    const { startupCommand: legacy, ...rest } = data as Partial<GhosttyPluginSettings> & {
+      startupCommand?: string;
+    };
+    this.settings = {
+      ...DEFAULT_SETTINGS,
+      ...rest,
+      agentCommands: { ...(rest.agentCommands ?? {}) },
+      fontSizes: { ...(rest.fontSizes ?? {}) },
+    };
+    this.applyFontSize();
+    // Before 0.9.0 one "Startup command" applied to every computer. Keep it as this
+    // computer's command; other computers set their own.
+    if (legacy !== undefined) {
+      const computer = computerName();
+      if (legacy.trim() && !(computer in this.settings.agentCommands)) {
+        this.settings.agentCommands[computer] = legacy.trim();
+      }
+      await this.saveSettings();
+    }
+  }
+
+  // The agent start command for this computer ("" = shell only).
+  agentCommand(): string {
+    return (this.settings.agentCommands[computerName()] ?? "").trim();
+  }
+
+  // This computer's font size, or the Ghostty config's.
+  fontSize(): number {
+    const size = this.settings.fontSizes[computerName()];
+    return typeof size === "number" && size >= FONT_SIZE_MIN && size <= FONT_SIZE_MAX
+      ? size
+      : this.ghosttyFont.size;
+  }
+
+  async setFontSize(size: number | null): Promise<void> {
+    const computer = computerName();
+    if (size === null) delete this.settings.fontSizes[computer];
+    else this.settings.fontSizes[computer] = size;
+    await this.saveSettings();
+    this.applyFontSize();
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_GHOSTTY)) {
+      if (leaf.view instanceof GhosttyTerminalView) leaf.view.refreshFont();
+    }
+  }
+
+  private applyFontSize(): void {
+    this.terminalFont = { ...this.ghosttyFont, size: this.fontSize() };
+  }
+
+  async setAgentCommand(value: string): Promise<void> {
+    const computer = computerName();
+    const command = value.trim();
+    if (command) this.settings.agentCommands[computer] = command;
+    else delete this.settings.agentCommands[computer];
+    await this.saveSettings();
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
   }
 
-  getNativeState(refresh = false): GhosttyNativeState {
+  async getNativeState(refresh = false): Promise<GhosttyNativeState> {
     if (refresh || !this.nativeState || !this.nativeState.native) {
-      this.nativeState = tryLoadGhosttyNative(this.resolvePluginDir());
+      this.nativeState = await loadGhosttyNative(this.resolvePluginDir());
     }
     return this.nativeState;
   }

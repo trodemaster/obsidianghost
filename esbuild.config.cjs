@@ -9,7 +9,7 @@ esbuild
     external: ["obsidian", "node-pty"],
     format: "cjs",
     platform: "node",
-    target: "es2018",
+    target: "es2020",
     logLevel: "info",
     sourcemap: production ? false : "inline",
     minify: production,
