@@ -62,15 +62,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Toolchain (MacPorts Node, gh)
+      - name: Toolchain (MacPorts Node)
         run: |
           echo /opt/local/bin >> "$GITHUB_PATH"
           export PATH="/opt/local/bin:$PATH"
           if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
             sudo port -N install nodejs22 npm10
           fi
-          command -v gh >/dev/null 2>&1 || sudo port -N install gh
-          node --version; gh --version | head -1
+          node --version
 
       - name: Check tag matches manifest version
         run: |
@@ -85,13 +84,9 @@ jobs:
         run: make release-zip
 
       - name: Publish GitHub release
+        # REST API via curl + node: no gh CLI on the runner VM, whose MacPorts tree
+        # is also the blakeports build environment.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          # Release notes: the CHANGELOG section for this version.
-          awk -v v="$VERSION" '$0 ~ "^## \\[?"v"\\]?" {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
-          [ -s notes.md ] || echo "obsidianghost ${VERSION}" > notes.md
-          prerelease=()
-          case "$VERSION" in 0.*|*-*) prerelease=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" "dist/obsidian-claude-ghostty-${VERSION}.zip" \
-            --title "obsidianghost ${GITHUB_REF_NAME}" --notes-file notes.md --verify-tag "${prerelease[@]}"
+          TAG: ${{ github.ref_name }}
+        run: scripts/publish-release.sh
