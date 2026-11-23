@@ -18,13 +18,13 @@ CLI=${OBSIDIAN_CLI:-/Applications/Obsidian.app/Contents/MacOS/obsidian-cli}
 WINCAP=${WINCAP:-$HOME/.claude/skills/screenshot-window/bin/wincap}
 PLUGIN_ID=obsidian-claude-ghostty
 VIEW_TYPE=ghostty-terminal-view
-VAULT=${OBSIDIAN_VAULT:-orac}
+VAULT=${OBSIDIAN_VAULT:-$(basename "$("$(dirname "${BASH_SOURCE[0]}")/list-vaults.sh" | head -n 1)")}
 
 die() { echo "obsidian-ui: $*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-Usage: scripts/obsidian-ui.sh <command> [args]       (vault: $OBSIDIAN_VAULT, default orac)
+Usage: scripts/obsidian-ui.sh <command> [args]       (vault: $OBSIDIAN_VAULT, default the first vault Obsidian knows)
 
   windows                 List Obsidian windows (title, frontmost)
   raise                   Bring the vault's window to the front
@@ -40,7 +40,7 @@ Usage: scripts/obsidian-ui.sh <command> [args]       (vault: $OBSIDIAN_VAULT, de
   shot [OUT.png]          Screenshot the vault's window; prints the PNG path
   close                   Close the test terminal
 
-Prefix with OBSIDIAN_VAULT=daneel to target another vault.
+Set OBSIDIAN_VAULT=<name> to target another vault.
 EOF
 }
 

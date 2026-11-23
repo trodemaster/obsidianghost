@@ -1,10 +1,17 @@
 import { build } from "esbuild";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, unlinkSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+
+// Vault to probe when none is given: $OBSIDIAN_VAULT, else the first vault Obsidian knows.
+function defaultVault() {
+  const script = join(dirname(fileURLToPath(import.meta.url)), "list-vaults.sh");
+  const first = execFileSync(script, { encoding: "utf8" }).split("\n")[0];
+  return first ? basename(first) : "";
+}
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const test = process.argv[2] || "kitty-images";
@@ -59,7 +66,7 @@ try {
   const { stdout, stderr } = await promisify(execFile)(
     "/Applications/Obsidian.app/Contents/MacOS/obsidian-cli",
     // vault= must come before the command; after it the CLI silently uses the focused vault.
-    [`vault=${process.argv[3] || "daneel"}`, "eval", `code=${code}`],
+    [`vault=${process.argv[3] || process.env.OBSIDIAN_VAULT || defaultVault()}`, "eval", `code=${code}`],
     { timeout: 60000, maxBuffer: 1024 * 1024 },
   );
   const marker = stdout.lastIndexOf("=> ");

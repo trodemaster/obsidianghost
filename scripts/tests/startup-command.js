@@ -1,5 +1,5 @@
 // Provider-independent startup, shell-only, directory, and title regression probe.
-// Run via: obsidian-cli eval code="eval(require('fs').readFileSync('/absolute/path/to/scripts/tests/startup-command.js','utf8'))" vault=daneel
+// Run via: obsidian-cli eval code="eval(require('fs').readFileSync('/absolute/path/to/scripts/tests/startup-command.js','utf8'))" vault=<vault>
 (async () => {
   const VIEW_TYPE = "ghostty-terminal-view";
   const plugin = app.plugins.getPlugin("obsidian-claude-ghostty");
@@ -128,19 +128,6 @@
     await waitForOutput(whitespace, "WHITESPACE_READY");
     checks.whitespaceStartsShell = !dump(whitespace).includes("claude --continue");
     whitespace.detach();
-
-    // The work machine's `daneel` wrapper; skipped where it isn't installed.
-    setAgent("if command -v daneel >/dev/null; then DANEEL_DRY_RUN=1 daneel; else printf 'DANEEL_%s\\n' ABSENT; fi");
-    const daneel = await open();
-    let daneelOutput = "";
-    for (let i = 0; i < 20 && !/--experimental|DANEEL_ABSENT/.test(daneelOutput); i++) {
-      await wait(100);
-      daneelOutput = dump(daneel);
-    }
-    if (!daneelOutput.includes("DANEEL_ABSENT")) {
-      checks.daneelScriptAvailable = daneelOutput.includes("copilot") && daneelOutput.includes("--no-sandbox");
-    }
-    daneel.detach();
 
     setAgent("obsidianghost_nonexistent_startup_command");
     const failed = await open();

@@ -27,9 +27,10 @@ make install         # build and sync into the central plugin directory
 make setup-vaults    # symlink the plugin into each vault
 ```
 
-- `make install` installs the npm dependencies, downloads `ghostty-vt.wasm` (the version and SHA-256 pinned in `native/libghostty-vt.env`), bundles `main.js`, and syncs the result into `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Set `PLUGIN_DIR=/path` for somewhere else.
-- `make setup-vaults` links that directory into `<vault>/.obsidian/plugins/obsidian-claude-ghostty` for each vault in `VAULTS` (default `~/orac ~/daneel`). It skips missing vaults and existing links.
-- `make setup-themes` optionally links the Nocturnal Winter theme; select it once in **Settings → Appearance**.
+- `make install` installs the npm dependencies, downloads `ghostty-vt.wasm` (the version and SHA-256 pinned in `native/libghostty-vt.env`), bundles `main.js`, and syncs the result into the plugin folder. By default that is `<vault>/.obsidian/plugins/obsidian-claude-ghostty` in the first vault Obsidian knows (`scripts/list-vaults.sh` lists them, sorted by path). `make help` prints the folder it will use.
+- `make setup-vaults` links that folder into every other vault Obsidian knows, so they all share one copy and one set of settings. It skips vaults that already have the plugin.
+- Override the defaults on the command line, or export them in a local `.envrc` (gitignored; direnv loads it): `VAULTS` (space-separated vault paths), `PLUGIN_DIR` (where the one real copy lives, e.g. a folder outside any vault), `THEME_DIR`.
+- `make setup-themes` optionally links the theme folder in `THEME_DIR` into each vault; select it once in **Settings → Appearance**.
 
 ### Enable
 

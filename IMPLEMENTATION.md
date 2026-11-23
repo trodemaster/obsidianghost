@@ -49,7 +49,7 @@ There is no native compile step. The wasm module is independent of Electron and 
 
 ## Theme and fonts
 
-Colors and font come from `~/.config/ghostty/config`: `theme`, `palette = N=#RRGGBB`, `font-family`, and `font-size`. The theme file is read from the Ghostty app bundle. Foreground and background fall back to Obsidian's CSS. The Nocturnal Winter Obsidian theme lives in machine-cfg and is linked by `make setup-themes`.
+Colors and font come from `~/.config/ghostty/config`: `theme`, `palette = N=#RRGGBB`, `font-family`, and `font-size`. The theme file is read from the Ghostty app bundle. Foreground and background fall back to Obsidian's CSS. An Obsidian theme can be linked into the vaults with `make setup-themes`.
 
 ## Build flow
 
@@ -73,7 +73,7 @@ Releases are GitHub release zips built by `.github/workflows/ci.yml` on the self
 
 Question: can `timg` render an image through the Kitty protocol inside a Claude session in the plugin?
 
-Findings (measured from a Claude session in the `orac` vault with `timg 1.6.3`):
+Findings (measured from a Claude session in a vault with `timg 1.6.3`):
 
 - `timg -pk` emits `ESC[?25l ESC_Ga=T,i=<random>,q=2,f=100,m=1;<base64 PNG>…`: direct PNG (`f=100`, default `t=d`), chunked (`m=1`), transmit-and-display at the cursor (`a=T`), responses suppressed (`q=2`). It uses no `U=1` and no Unicode placeholder characters. `--compress` did not change the prefix.
 - The plugin only handles direct PNG with Unicode virtual placements (`U=1`), the form Copilot CLI uses. It does not paint `a=T` placements positioned at the cursor, so timg output would not render even if it reached the terminal.

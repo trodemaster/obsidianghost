@@ -26,7 +26,7 @@ The headless and eval-only tests (`make test`, `npm run test:rendering -- <vault
 
 ## Commands
 
-The vault defaults to `orac`; prefix `OBSIDIAN_VAULT=daneel` for another one.
+The vault defaults to the first one Obsidian knows (`scripts/list-vaults.sh`); set `OBSIDIAN_VAULT=<name>` (for example in `.envrc`) for another one.
 
 ```bash
 S=scripts/obsidian-ui.sh
@@ -53,10 +53,10 @@ $S close                     # always close the test tab when done
 
 ## Gotchas found while building this
 
-- `obsidian-cli` honors `vault=` only **before** the command (`obsidian-cli vault=orac eval code=…`). After it, the option is silently ignored and the focused vault is used.
+- `obsidian-cli` honors `vault=` only **before** the command (`obsidian-cli vault=<vault> eval code=…`). After it, the option is silently ignored and the focused vault is used.
 - System Events `keystroke` cannot type characters outside the keyboard layout: `é` arrives as `a`. That is why `type` rejects non-ASCII. Real users type `é` as a dead key, which tests the IME/composition path: `$S key opt+e e` sends `é`.
 - `kind` is a reserved word in AppleScript (`set kind to …` fails with -10006); pass data into AppleScript through `on run argv` (`osascript - args… <<'APPLESCRIPT'`), never by splicing strings into source.
-- The window title follows the active tab (`✳ obsidian-session - orac - Obsidian 1.15.1`); match on ` - <vault> - Obsidian`.
+- The window title follows the active tab (`✳ obsidian-session - <vault> - Obsidian 1.15.1`); match on ` - <vault> - Obsidian`.
 - A just-opened tab needs its pty and engine before input; `open` waits for both (up to 5 s).
 
 ## Example: check a keyboard fix end to end

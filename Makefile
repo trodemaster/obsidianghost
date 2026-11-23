@@ -1,14 +1,23 @@
 SHELL := /bin/bash
 
-# ── configuration (override on the command line, e.g. make install PLUGIN_DIR=...) ──
+# ── configuration (override on the command line, or export in a local .envrc) ──
 PLUGIN_ID  := obsidian-claude-ghostty
-PLUGIN_DIR ?= $(HOME)/Developer/machine-cfg/obsisian/plugins/$(PLUGIN_ID)
 
-THEME_NAME := Nocturnal Winter
-THEME_DIR  ?= $(HOME)/Developer/machine-cfg/obsisian/themes/$(THEME_NAME)
+# Vaults that get the plugin: every vault Obsidian knows about (scripts/list-vaults.sh).
+# Space-separated paths, so paths containing spaces are not supported here.
+ifndef VAULTS
+VAULTS := $(shell scripts/list-vaults.sh | tr '\n' ' ')
+endif
 
-# Obsidian vaults that get symlinks into the central plugin and theme dirs
-VAULTS ?= $(HOME)/orac $(HOME)/daneel
+# The one real copy of the plugin. Default: inside the first vault; the others get a
+# symlink to it (make setup-vaults) and share its settings. Point PLUGIN_DIR somewhere
+# else to keep the plugin outside any vault.
+ifndef PLUGIN_DIR
+PLUGIN_DIR := $(if $(firstword $(VAULTS)),$(firstword $(VAULTS))/.obsidian/plugins/$(PLUGIN_ID))
+endif
+
+# Optional: a theme folder to link into each vault's .obsidian/themes (make setup-themes).
+THEME_DIR ?=
 
 # Release tag for install-release (default: the version in manifest.json)
 VERSION := $(shell node -p 'require("./manifest.json").version' 2>/dev/null)
@@ -44,11 +53,12 @@ help:
 		'  make release-zip        package + dist/$(PLUGIN_ID)-$(VERSION).zip' \
 		'  make dev                esbuild watch mode' \
 		'  make setup-vaults       Symlink the plugin into each vault' \
-		'  make setup-themes       Symlink the Nocturnal Winter theme into each vault' \
+		'  make setup-themes       Symlink THEME_DIR into each vault as a theme' \
 		'  make clean              Remove build output and caches' \
 		'' \
-		'Variables: PLUGIN_DIR, VAULTS, TAG' \
-		'  PLUGIN_DIR=$(PLUGIN_DIR)'
+		'Variables (export them in .envrc to keep them): PLUGIN_DIR, VAULTS, THEME_DIR, TAG' \
+		'  PLUGIN_DIR=$(PLUGIN_DIR)' \
+		'  VAULTS=$(VAULTS)'
 
 doctor:
 	@PLUGIN_DIR="$(PLUGIN_DIR)" VAULTS="$(VAULTS)" scripts/doctor.sh
@@ -80,14 +90,21 @@ verify: package
 release-zip: check test verify
 	scripts/package.sh --zip
 
+# Fail early, with a hint, when no vault was found and PLUGIN_DIR is unset.
+define need_plugin_dir
+	@test -n "$(PLUGIN_DIR)" || { echo "No PLUGIN_DIR: Obsidian knows no vaults here. Set PLUGIN_DIR=<vault>/.obsidian/plugins/$(PLUGIN_ID)" >&2; exit 1; }
+endef
+
 install: doctor package sync
 
 reinstall: build
+	$(need_plugin_dir)
 	install -d "$(PLUGIN_DIR)"
 	rsync -a main.js manifest.json styles.css "$(PLUGIN_DIR)/"
 
 # Sync the payload without touching data.json (the plugin's saved settings).
 sync:
+	$(need_plugin_dir)
 	install -d "$(PLUGIN_DIR)"
 	rsync -a --exclude node_modules "$(PAYLOAD)/" "$(PLUGIN_DIR)/"
 	install -d "$(PLUGIN_DIR)/node_modules"
@@ -107,18 +124,21 @@ define link_into_vaults
 	@for v in $(VAULTS); do \
 	  if [ ! -d "$$v" ]; then printf 'WARN  vault not found: %s — skipping\n' "$$v"; continue; fi; \
 	  target="$$v/.obsidian/$(2)"; \
-	  if [ -L "$$target" ]; then printf 'skip  %s (symlink exists)\n' "$$target"; \
+	  if [ -e "$$target" ] && [ "$$target" -ef "$(1)" ]; then printf 'skip  %s (the plugin itself)\n' "$$target"; \
+	  elif [ -L "$$target" ]; then printf 'skip  %s (symlink exists)\n' "$$target"; \
 	  elif [ -e "$$target" ]; then printf 'WARN  %s exists but is not a symlink — skipping\n' "$$target"; \
 	  else mkdir -p "$$(dirname "$$target")" && ln -s "$(1)" "$$target" && printf 'link  %s\n' "$$target"; fi; \
 	done
 endef
 
 setup-vaults:
+	$(need_plugin_dir)
 	$(call link_into_vaults,$(PLUGIN_DIR),plugins/$(PLUGIN_ID))
 
 # After linking, select the theme once in Settings → Appearance.
 setup-themes:
-	$(call link_into_vaults,$(THEME_DIR),themes/$(THEME_NAME))
+	@test -d "$(THEME_DIR)" || { echo "Set THEME_DIR to a theme folder (one holding manifest.json and theme.css)." >&2; exit 1; }
+	$(call link_into_vaults,$(THEME_DIR),themes/$(notdir $(THEME_DIR)))
 
 dev: deps
 	npm run dev

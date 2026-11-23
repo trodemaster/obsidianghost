@@ -1922,7 +1922,7 @@ interface GhosttyPluginSettings {
   // Absolute or "~"-prefixed path to the shell. Empty string = auto-detect (see resolveShell).
   shell: string;
   // Per computer (key: computerName()), so a data.json copied or synced between machines
-  // still applies the right values on each. (machine-cfg ignores data.json: each host keeps its own.)
+  // still applies the right values on each. (Keep data.json out of version control: each host keeps its own.)
   agentCommands: Record<string, string>;
   // Font size in px; a missing entry uses font-size from the Ghostty config.
   fontSizes: Record<string, number>;

@@ -4,7 +4,7 @@ Obsidian plugin that embeds an agent terminal (Claude Code, Copilot CLI, or any 
 
 - [README.md](README.md): install, settings, usage, and how the plugin works (user-facing; development, testing and release details live here instead)
 - [IMPLEMENTATION.md](IMPLEMENTATION.md): architecture, engine adapter, design notes, and findings/backlog
-- [INSTALL.md](INSTALL.md): agent-run install/upgrade/uninstall guide, with skill frontmatter (`install-obsidianghost`). Steps 3–4 were run verbatim on 2026-11-21 (fresh install and upgrade into a scratch folder, `verify-payload` pass) and steps 7 and 9 read-only in `orac`. Keep it in step with the payload layout, `native/libghostty-vt.env` and the settings API (`setAgentCommand`, `setFontSize`, `getNativeState`).
+- [INSTALL.md](INSTALL.md): agent-run install/upgrade/uninstall guide, with skill frontmatter (`install-obsidianghost`). Steps 3–4 were run verbatim on 2026-11-21 (fresh install and upgrade into a scratch folder, `verify-payload` pass) and steps 7 and 9 read-only in a live vault. Keep it in step with the payload layout, `native/libghostty-vt.env` and the settings API (`setAgentCommand`, `setFontSize`, `getNativeState`).
 - [CHANGELOG.md](CHANGELOG.md): release notes (the release workflow publishes the matching section)
 
 This file holds the working state: conventions, toolchain, behavior notes, testing, and next steps. Keep it current. There is no separate handoff document.
@@ -14,34 +14,35 @@ This file holds the working state: conventions, toolchain, behavior notes, testi
 - Personal repo: work on a branch and open a PR to `main` only when the work is done. The pushable remote is `origin` (https://github.com/trodemaster/obsidianghost.git).
 - **Package management**: this machine uses MacPorts only. Use the `/macports` skill for installing or managing packages (Node.js, etc.); do not suggest or use Homebrew.
 - Run `git`/`gh` from inside the repo directory (direnv loads credentials from the shell's cwd).
-- Target this machine's OS and architecture (macOS 27, Apple Silicon). The work machine is nearly identical.
+- Target macOS on Apple Silicon.
+- Personal setup (which vaults, where the plugin lives, CI runners) stays out of the repo: it is set through a local, gitignored `.envrc` (`VAULTS`, `PLUGIN_DIR`, `THEME_DIR`, `OBSIDIAN_VAULT`) and the `OBSIDIANGHOST_RUNS_ON` repository variable.
 
 ## Toolchain
 
 ```bash
 sudo port install nodejs22 npm10
 make doctor      # lists anything missing
-make install     # npm ci, fetch wasm, bundle, package, sync to the central plugin dir
+make install     # npm ci, fetch wasm, bundle, package, sync to the plugin dir
 make setup-vaults
 ```
 
 - **libghostty-vt**: the official 1.0.1 WebAssembly release, pinned (version, URL, SHA-256) in `native/libghostty-vt.env`. `make wasm` downloads and verifies it into `native/ghostty-vt.wasm` (gitignored). No Zig, no vendored Ghostty, no C/C++ build. Building it from source would need Zig 0.17 (MacPorts `zig-0.17`), but nothing here does.
 - **node-pty**: pinned to 1.1.0 and used through its shipped N-API prebuild; `npm ci --ignore-scripts` skips its node-gyp install script. npm drops the execute bit on `spawn-helper`; `scripts/package.sh` restores it (without it every spawn fails with `posix_spawnp failed`).
 - **npm**: MacPorts installs and `sudo npm` leave `~/.npm` root-owned. Never chown it. The Makefile points npm at a repo-local cache (`.cache/npm`).
-- **Versions**: semver, 0.x are betas. To release: bump `manifest.json` and `package.json`, add the `versions.json` entry and the `CHANGELOG.md` section, merge to `main`, run `scripts/ci-runner.sh up`, push tag `v<version>`, then `scripts/ci-runner.sh down`. `manifest.json`, `package.json`, `versions.json` and `CHANGELOG.md` move together; `scripts/package.sh` refuses mismatched versions and the release job refuses a tag that differs from `manifest.json`.
+- **Versions**: semver, 0.x are betas. To release: bump `manifest.json` and `package.json`, add the `versions.json` entry and the `CHANGELOG.md` section, merge to `main`, push tag `v<version>` (if the repository variable `OBSIDIANGHOST_RUNS_ON` points at self-hosted runners, have one online first). `manifest.json`, `package.json`, `versions.json` and `CHANGELOG.md` move together; `scripts/package.sh` refuses mismatched versions and the release job refuses a tag that differs from `manifest.json`.
 - Make targets: `make help` lists them. `make reinstall` is the fast JS loop; `make test` and `make verify` run without Obsidian.
 
 ## CI and releases
 
-`.github/workflows/ci.yml` runs on the self-hosted macOS runners (label from the `OBSIDIANGHOST_RUNNER` repository variable, default `macOS_27`): `make check`, `make test`, `make verify` on every push and PR, and for a `v*` tag `make release-zip` plus `scripts/publish-release.sh` (REST API through curl, 0.x marked pre-release; `DRAFT=true` makes a draft for testing, no tag created). GitHub registers self-hosted runners per repository for personal accounts, and ghrunnerd registers its runners to blakeports, so this repo uses an on-demand runner: `scripts/ci-runner.sh up` starts the `macos-27` Lima VM on far-star if needed (via `ghrunnerd vm-start`) and runs a second, separate agent in it (`~/actions-runner-obsidianghost`, copied from the VM's `/opt/actions-runner`), registered as `macOS_27-obsidianghost` with the `macOS_27` label; `--once` makes it ephemeral (one job). `scripts/ci-runner.sh down` deregisters it and powers the VM off only if `up` powered it on and the blakeports `macOS_27` runner is idle. `status` shows all three. Queued jobs wait (up to a day) until the runner is up. Sandbox off; `ghrunnerd exec` takes its flags before the VM id. First green run: PR #2, `test` in 55 s.
+`.github/workflows/ci.yml` runs `make check`, `make test`, `make verify` on every push and PR, and for a `v*` tag `make release-zip` plus `scripts/publish-release.sh` (REST API through curl, 0.x marked pre-release; `DRAFT=true` makes a draft for testing, no tag created). Jobs run on GitHub-hosted `macos-latest` unless the repository variable `OBSIDIANGHOST_RUNS_ON` holds a JSON `runs-on` value (for example `["self-hosted","macOS_27"]`). Pull requests always use the hosted runner, so fork code never reaches a self-hosted machine; if self-hosted runners are used, also set Settings → Actions → "Require approval for all outside collaborators". The Node setup is the composite action `.github/actions/toolchain` (setup-node on hosted runners, MacPorts on self-hosted ones).
 
 ## Install layout
 
-Central install: `~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty/`. Each vault symlinks to it (`make setup-vaults`). That directory is tracked in machine-cfg, so commit and push it from the terminal after `make install`. Since 0.9.0 the payload is about 1.5 MB (no node-pty sources or build output); `make install` removes the old `native/` directory there, so commit that deletion too. `make install-release TAG=…` installs a release zip instead of a local build (for example on the work machine, whose machine-cfg has a different upstream). The plugin's settings file, `data.json`, is gitignored in machine-cfg (`obsisian/plugins/*/data.json`) and stays unique to each host: never commit it.
+`make install` syncs to `PLUGIN_DIR` (default `<first vault>/.obsidian/plugins/obsidian-claude-ghostty`, see `make help`); `make setup-vaults` links it into the other vaults. The payload is about 1.5 MB (no node-pty sources or build output); `make install` removes the old pre-0.9 `native/` directory there. `make install-release TAG=…` installs a release zip instead of a local build. The plugin's settings file, `data.json`, stays unique to each host: if the plugin folder is under version control, ignore it and never commit it.
 
 ## Behavior notes
 
-- **Startup**: **Start directory**, **Shell**, and **Agent start command** are settings. The agent command is stored per computer in `data.json` (`agentCommands`, keyed by the short lowercase host name). `data.json` stays local to each host (machine-cfg ignores it); the host keys only make a copied or synced file safe. A pre-0.9 `startupCommand` migrates to the first computer that loads it. Blank Shell resolves to `/opt/local/bin/bash` (MacPorts bash 5) if present, else `/bin/bash`. Blank agent command = plain shell at the vault root; there is no built-in agent command (set `claude --continue` for Claude Code). Right-click the ghost ribbon icon, or use **+**, for "New shell (no Agent)". The plugin ID stays `obsidian-claude-ghostty`.
+- **Startup**: **Start directory**, **Shell**, and **Agent start command** are settings. The agent command is stored per computer in `data.json` (`agentCommands`, keyed by the short lowercase host name). `data.json` stays local to each host; the host keys only make a copied or synced file safe. A pre-0.9 `startupCommand` migrates to the first computer that loads it. Blank Shell resolves to `/opt/local/bin/bash` (MacPorts bash 5) if present, else `/bin/bash`. Blank agent command = plain shell at the vault root; there is no built-in agent command (set `claude --continue` for Claude Code). Right-click the ghost ribbon icon, or use **+**, for "New shell (no Agent)". The plugin ID stays `obsidian-claude-ghostty`.
 - **Links**: Cmd/Ctrl+click opens OSC 8 links (`vt.hyperlinkAt`) and plain-text URLs (regex over row text). The modifier is required on the click itself.
 - **Selection and input**: mouse drag selects cells and copies through Electron's `clipboard`. Dropped files insert shell-quoted paths via `webUtils.getPathForFile`. Shift+Enter sends ESC+CR. The shell is identified as Ghostty (`TERM_PROGRAM=ghostty`, pty name `xterm-ghostty`).
 - **Titles**: the tab label and header follow the agent's OSC 0/2 title. Both need undocumented Obsidian API (`leaf.updateHeader()`, `view.titleEl`), reached through casts.
@@ -62,14 +63,14 @@ Status on 2026-11-21 (branch `libghostty-1.0`, v0.9.0, libghostty-vt 1.0.1 wasm,
 
 - `make test`: pass, 27 of 27. `make verify`: pass (payload complete, packaged wasm passes, packaged node-pty spawns a 91×27 pty).
 - `make check`: tsc and esbuild clean.
-- Live in Obsidian (`orac`, after `make install` and an Obsidian restart): the plugin reports `Loaded libghostty-vt 1.0.1 (wasm)`; `test:rendering` pass, 31 of 31; `test:images` pass, 19 of 19.
-- Claude Code session checked by eye (screenshots): tables, code, CJK, box drawing and the status line render correctly. That check found the grapheme bug (👩‍💻/🇺🇸/👍🏽 split), now fixed and confirmed in `orac` after a restart with `scripts/obsidian-ui.sh`.
-- Settings probes in `orac` (run directly with `obsidian-cli vault=orac eval`, no reload): `startup-command.js` pass, 15 of 15 (its `daneel` check skips where that wrapper is absent); `font-size.js` pass, 7 of 7. Neither writes `data.json`.
-- `osc8-links`, `plain-url-links`, `shift-enter`, `session-title`, `drag-drop`: pass in `orac`. Every live probe now opens its own shell-only tab and closes it, so none can write into a terminal running an agent; run them directly (`obsidian-cli vault=<vault> eval code="eval(require('fs').readFileSync('<abs path>','utf8'))"`) after a restart. `live-test.sh` reloads the plugin, so avoid it.
+- Live in Obsidian (after `make install` and an Obsidian restart): the plugin reports `Loaded libghostty-vt 1.0.1 (wasm)`; `test:rendering` pass, 31 of 31; `test:images` pass, 19 of 19.
+- Claude Code session checked by eye (screenshots): tables, code, CJK, box drawing and the status line render correctly. That check found the grapheme bug (👩‍💻/🇺🇸/👍🏽 split), now fixed and confirmed in a live vault after a restart with `scripts/obsidian-ui.sh`.
+- Settings probes (run directly with `obsidian-cli vault=<vault> eval`, no reload): `startup-command.js` pass, 15 of 15; `font-size.js` pass, 7 of 7. Neither writes `data.json`.
+- `osc8-links`, `plain-url-links`, `shift-enter`, `session-title`, `drag-drop`: pass. Every live probe now opens its own shell-only tab and closes it, so none can write into a terminal running an agent; run them directly (`obsidian-cli vault=<vault> eval code="eval(require('fs').readFileSync('<abs path>','utf8'))"`) after a restart. `live-test.sh` reloads the plugin, so avoid it.
 
 ## Known issues and next steps
 
-- 0.9.0 is released (2026-11-21, pre-release). Before 1.0: real use on the work machine (`make install-release TAG=v0.9.0`, own `data.json`), and any fixes that turns up.
+- 0.9.0 is released (2026-11-21, pre-release). Before 1.0: real use on a second machine (`make install-release TAG=v0.9.0`, own `data.json`), and any fixes that turns up.
 - Fonts: chezmoi installs the four SauceCodePro Nerd Font Mono faces (dotfiles `run_onchange_darwin.sh.tmpl`) and sets `font-family = SauceCodePro Nerd Font Mono`.
 - Kitty graphics through libghostty-vt (`ghostty_kitty_graphics_*`, render-state placement iterator) would bring cursor-positioned placements (`a=T`, what `timg -pk` emits) and let `kitty-graphics.ts` go. It needs a synchronous PNG decoder installed with `ghostty_sys_set` (see IMPLEMENTATION.md).
 - Selection and key encoding could move to the library too (`ghostty_selection_gesture_*`, `ghostty_key_encoder_*`).
