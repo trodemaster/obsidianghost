@@ -1,0 +1,23 @@
+name: Toolchain
+description: Node 20+ on whatever runner the job landed on.
+runs:
+  using: composite
+  steps:
+    # GitHub-hosted runners: the setup-node action.
+    - if: runner.environment == 'github-hosted'
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    # Self-hosted macOS runners keep Node in MacPorts (no preinstalled toolchain).
+    - if: runner.environment == 'self-hosted'
+      shell: bash
+      run: |
+        echo /opt/local/bin >> "$GITHUB_PATH"
+        export PATH="/opt/local/bin:$PATH"
+        if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
+          sudo port -N install nodejs22 npm10
+        fi
+
+    - shell: bash
+      run: sw_vers; uname -m; node --version; npm --version

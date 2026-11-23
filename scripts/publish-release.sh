@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Publish dist/obsidian-claude-ghostty-<version>.zip as a GitHub release, with the
 # CHANGELOG section for that version as its notes. Uses the REST API through curl
-# and node, so the runner needs no gh CLI (the CI VM's MacPorts tree is also the
-# blakeports build environment and should not gain packages).
+# and node, so the runner needs no gh CLI.
 #
 # Env: GH_TOKEN, GITHUB_REPOSITORY (owner/repo), TAG (default v<manifest version>).
 # DRAFT=true makes a draft release (no tag is created), for testing.

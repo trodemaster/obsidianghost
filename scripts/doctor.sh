@@ -42,6 +42,8 @@ if [ -n "${PLUGIN_DIR:-}" ]; then
   parent="$(dirname "$PLUGIN_DIR")"
   if [ -d "$parent" ]; then ok plugin-dir "$PLUGIN_DIR"
   else warn plugin-dir "$parent does not exist yet (it will be created by make install)"; fi
+else
+  miss plugin-dir "no vault found and PLUGIN_DIR unset; open a vault in Obsidian once, or set PLUGIN_DIR=<vault>/.obsidian/plugins/obsidian-claude-ghostty"
 fi
 
 for v in ${VAULTS:-}; do

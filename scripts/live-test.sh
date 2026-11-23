@@ -12,7 +12,7 @@ OBSIDIAN_CLI=/Applications/Obsidian.app/Contents/MacOS/obsidian-cli
 PLUGIN_ID=obsidian-claude-ghostty
 
 TEST_SCRIPT="${1:-}"
-VAULT="${2:-daneel}"
+VAULT="${2:-${OBSIDIAN_VAULT:-$(basename "$("$REPO_ROOT/scripts/list-vaults.sh" | head -n 1)")}}"
 
 if [ -z "$TEST_SCRIPT" ]; then
   echo "usage: $0 <test-script.js> [vault]" >&2

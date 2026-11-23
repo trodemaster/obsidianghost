@@ -1,4 +1,4 @@
-// Run with npm run test:images (optional vault argument defaults to daneel).
+// Run with npm run test:images (optional vault argument defaults to $OBSIDIAN_VAULT, else the first vault Obsidian knows).
 // The probe upgrades ONLY a new shell-only leaf; it never reloads active agents.
 (async () => {
   const { KittyGraphics, GhosttyTerminalView, terminalRowCells, decodeImageCell, native, parseGhosttyConfig } = globalThis.ghosttyImageTestModule;

@@ -1,6 +1,6 @@
 // Per-computer font size: default from the Ghostty config, live re-layout of open
 // terminals, other computers' sizes ignored, and reset to the Ghostty size.
-// Run via: obsidian-cli vault=orac eval code="eval(require('fs').readFileSync('/absolute/path/to/scripts/tests/font-size.js','utf8'))"
+// Run via: obsidian-cli vault=<vault> eval code="eval(require('fs').readFileSync('/absolute/path/to/scripts/tests/font-size.js','utf8'))"
 // Needs one open terminal. saveData is stubbed, so data.json is never written.
 (async () => {
   const VIEW_TYPE = "ghostty-terminal-view";

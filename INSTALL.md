@@ -43,18 +43,9 @@ plutil -extract vaults json -o - "$HOME/Library/Application Support/obsidian/obs
 
 ## 2. Choose the plugin folder
 
-The plugin lives in one folder; each vault either contains it or links to it.
+The plugin lives in one folder; each vault either contains it or links to it. If the user keeps their plugins in a central folder outside the vaults, use that as `PLUGIN_DIR` and link every vault to it (step 5).
 
-- **Central folder (Blake's machines)**: if `~/Developer/machine-cfg/obsisian/plugins/` exists, use
-  `PLUGIN_DIR=~/Developer/machine-cfg/obsisian/plugins/obsidian-claude-ghostty` and link each vault to it (step 5). machine-cfg must ignore `data.json` so settings stay on this machine; the work and personal machine-cfg repos are separate, so check on each:
-
-  ```bash
-  cd ~/Developer/machine-cfg && git check-ignore -q obsisian/plugins/obsidian-claude-ghostty/data.json \
-    && echo "data.json ignored" || echo "NOT ignored: ask the user, then add obsisian/plugins/*/data.json to .gitignore"
-  ```
-
-  `cd` into the repo first (not `git -C`): direnv picks the git credentials from the working directory.
-- **Otherwise**: install into the first chosen vault,
+- Install into the first chosen vault,
   `PLUGIN_DIR=<vault>/.obsidian/plugins/obsidian-claude-ghostty`, and link any other chosen vaults to it (step 5). Vaults sharing one folder share settings; if the user wants separate settings per vault, repeat steps 4–5 with a separate `PLUGIN_DIR` per vault instead.
 
 If `<vault>/.obsidian/plugins/obsidian-claude-ghostty` already exists, this is an upgrade: see [Upgrade](#upgrade) and keep using that folder (follow the symlink with `readlink` if it is one).
@@ -212,7 +203,7 @@ Ask first. Disable the plugin in **Settings → Community plugins**, quit Obsidi
 | "libghostty-vt not found" in the terminal tab | `ghostty-vt.wasm` is missing from `PLUGIN_DIR`: redo step 4. |
 | `posix_spawnp failed` | `chmod 755 "$PLUGIN_DIR/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper"` |
 | "Failed to load node-pty" | `node_modules/node-pty` is incomplete: redo step 4. If macOS blocked the binary, run the `xattr` line from step 4. |
-| CLI commands hit the wrong vault | Put `vault=<name>` before the command (`obsidian-cli vault=orac eval …`). |
+| CLI commands hit the wrong vault | Put `vault=<name>` before the command (`obsidian-cli vault=<vault> eval …`). |
 | CLI says it cannot connect | Turn on **Settings → General → Advanced → Command line interface**; in a sandboxed agent, run it with the sandbox disabled. |
 | Old version still running after the files changed | Obsidian was reloaded, not restarted: quit with `Cmd+Q` and reopen. |
 | Emoji or box characters look wrong | Set a real font family in `~/.config/ghostty/config` (for example `font-family = SauceCodePro Nerd Font Mono`), then restart Obsidian. |

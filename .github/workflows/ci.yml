@@ -1,9 +1,11 @@
 name: CI
 
-# Runs on the self-hosted macOS runners. The runner label comes from the
-# OBSIDIANGHOST_RUNNER repository variable (default macOS_27); the runner must be
-# registered to this repository. Nothing is compiled: the job needs Node from
-# MacPorts, and downloads the pinned libghostty-vt wasm (checksum-verified).
+# Runs on GitHub-hosted macOS by default. To use your own runners, set the repository
+# variable OBSIDIANGHOST_RUNS_ON to a JSON runs-on value, e.g. ["self-hosted","macOS_27"]
+# (Settings → Secrets and variables → Actions → Variables). Pull requests always run
+# on GitHub-hosted runners, so a fork's code never reaches a self-hosted machine.
+# Nothing is compiled: the job needs Node and downloads the pinned libghostty-vt wasm
+# (checksum-verified).
 #
 # Pushing a v* tag whose version matches manifest.json builds the release zip and
 # publishes it as a GitHub release (0.x versions are marked pre-release).
@@ -29,19 +31,12 @@ defaults:
 
 jobs:
   test:
-    runs-on: [self-hosted, "${{ vars.OBSIDIANGHOST_RUNNER || 'macOS_27' }}"]
+    runs-on: ${{ github.event_name == 'pull_request' && 'macos-latest' || fromJSON(vars.OBSIDIANGHOST_RUNS_ON || '"macos-latest"') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
-      - name: Toolchain (MacPorts Node)
-        run: |
-          echo /opt/local/bin >> "$GITHUB_PATH"
-          export PATH="/opt/local/bin:$PATH"
-          if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
-            sudo port -N install nodejs22 npm10
-          fi
-          sw_vers; uname -m; node --version; npm --version
+      - uses: ./.github/actions/toolchain
 
       - name: Type-check and bundle
         run: make check
@@ -55,21 +50,14 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
-    runs-on: [self-hosted, "${{ vars.OBSIDIANGHOST_RUNNER || 'macOS_27' }}"]
+    runs-on: ${{ github.event_name == 'pull_request' && 'macos-latest' || fromJSON(vars.OBSIDIANGHOST_RUNS_ON || '"macos-latest"') }}
     timeout-minutes: 20
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
 
-      - name: Toolchain (MacPorts Node)
-        run: |
-          echo /opt/local/bin >> "$GITHUB_PATH"
-          export PATH="/opt/local/bin:$PATH"
-          if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
-            sudo port -N install nodejs22 npm10
-          fi
-          node --version
+      - uses: ./.github/actions/toolchain
 
       - name: Check tag matches manifest version
         run: |
@@ -84,8 +72,7 @@ jobs:
         run: make release-zip
 
       - name: Publish GitHub release
-        # REST API via curl + node: no gh CLI on the runner VM, whose MacPorts tree
-        # is also the blakeports build environment.
+        # REST API via curl + node: needs no gh CLI on the runner.
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}

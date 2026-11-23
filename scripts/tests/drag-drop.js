@@ -27,8 +27,8 @@
 
   const fileA = new File([], "plain.png");
   const fileB = new File([], "has space and quote.png");
-  const pathA = "/Users/blake/Desktop/plain.png";
-  const pathB = "/Users/blake/Desktop/has space and it's a quote.png";
+  const pathA = require("os").homedir() + "/Desktop/plain.png";
+  const pathB = require("os").homedir() + "/Desktop/has space and it's a quote.png";
 
   const electron = require("electron");
   const origGetPathForFile = electron.webUtils.getPathForFile;
